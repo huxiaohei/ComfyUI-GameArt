@@ -1,0 +1,19 @@
+# 冒烟批次：3 个国潮小资产，每项 2 张候选，预算 2.0。
+# 运行：ga batch start examples/manifests/smoke.yaml
+batch_id: smoke
+workflow: ../../workflows/text_to_asset.json
+style_card: ../style_cards/guochao.yaml
+candidates: 2
+qc_threshold: 6.0
+budget: 2.0
+defaults:
+  gen.size: 1024x1024
+items:
+  - id: coin
+    brief: 铜钱图标，方孔圆钱，金铜色，正面视角
+  - id: cloud
+    brief: 祥云纹样，单朵卷云，可平铺装饰
+  - id: lantern
+    brief: 灯笼道具，红色圆灯笼，金色流苏
+    sets:
+      expand.asset_type: prop

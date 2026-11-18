@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+outputs/
+.env
+.DS_Store
+# 字体文件体积大，不随仓库分发；下载方法见 examples/fonts/README.md
+examples/fonts/*
+!examples/fonts/README.md

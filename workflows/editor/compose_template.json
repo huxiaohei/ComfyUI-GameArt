@@ -1,0 +1,222 @@
+{
+  "id": "ef3798a7-5caa-5ff1-bbe3-11431a848b4e",
+  "revision": 0,
+  "last_node_id": 3,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "title": "素材图 · art",
+      "pos": [
+        80,
+        80
+      ],
+      "size": [
+        340,
+        112
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "image"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "ga_id": "art"
+      },
+      "widgets_values": [
+        "art.png",
+        "image"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "GAComposeTemplate",
+      "title": "模板合成 · compose",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        340,
+        248
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "layout_path",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "layout_path"
+          }
+        },
+        {
+          "name": "vars_json",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "vars_json"
+          }
+        },
+        {
+          "name": "art",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "art_mask",
+          "type": "MASK",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GAComposeTemplate",
+        "ga_id": "compose"
+      },
+      "widgets_values": [
+        "@repo/examples/layouts/demo_tile.yaml",
+        "{\"name\": \"萬\"}"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "GASaveAsset",
+      "title": "保存资产 · save",
+      "pos": [
+        920,
+        80
+      ],
+      "size": [
+        340,
+        240
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "name": "subfolder",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "subfolder"
+          }
+        },
+        {
+          "name": "name",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "name"
+          }
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 4
+        },
+        {
+          "name": "meta",
+          "type": "GA_META",
+          "link": null
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "GASaveAsset",
+        "ga_id": "save"
+      },
+      "widgets_values": [
+        "ga/compose_template",
+        "asset"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      2,
+      "IMAGE"
+    ],
+    [
+      2,
+      1,
+      1,
+      2,
+      3,
+      "MASK"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      2,
+      1,
+      3,
+      3,
+      "MASK"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

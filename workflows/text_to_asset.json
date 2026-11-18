@@ -1,0 +1,121 @@
+{
+  "style": {
+    "class_type": "GAStyleCard",
+    "inputs": {
+      "path": "@repo/examples/style_cards/guochao.yaml"
+    },
+    "_meta": {
+      "title": "风格卡"
+    }
+  },
+  "expand": {
+    "class_type": "GAPromptExpand",
+    "inputs": {
+      "brief": "",
+      "asset_type": "icon",
+      "profile": "text",
+      "style": [
+        "style",
+        0
+      ],
+      "tag": ""
+    },
+    "_meta": {
+      "title": "提示词扩写"
+    }
+  },
+  "gen": {
+    "class_type": "GACloudGenerate",
+    "inputs": {
+      "prompt": [
+        "expand",
+        0
+      ],
+      "negative": [
+        "expand",
+        1
+      ],
+      "size": "1024x1024",
+      "n": 1,
+      "transparent": true,
+      "seed": -1,
+      "profile": "image",
+      "style": [
+        "style",
+        0
+      ],
+      "meta": [
+        "expand",
+        2
+      ],
+      "tag": "",
+      "edit_profile": "image_edit"
+    },
+    "_meta": {
+      "title": "云端生图"
+    }
+  },
+  "bg": {
+    "class_type": "GARemoveBackground",
+    "inputs": {
+      "image": [
+        "gen",
+        0
+      ],
+      "method": "none",
+      "mask": [
+        "gen",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "去背景"
+    }
+  },
+  "save": {
+    "class_type": "GASaveAsset",
+    "inputs": {
+      "image": [
+        "bg",
+        0
+      ],
+      "subfolder": "ga/text_to_asset",
+      "name": "asset",
+      "mask": [
+        "bg",
+        1
+      ],
+      "meta": [
+        "gen",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "保存资产"
+    }
+  },
+  "show_prompt": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "expand",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "查看正向提示词"
+    }
+  },
+  "show_negative": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "expand",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "查看反向提示词"
+    }
+  }
+}

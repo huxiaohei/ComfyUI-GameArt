@@ -1,0 +1,47 @@
+{
+  "art": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "art.png"
+    },
+    "_meta": {
+      "title": "素材图"
+    }
+  },
+  "compose": {
+    "class_type": "GAComposeTemplate",
+    "inputs": {
+      "layout_path": "@repo/examples/layouts/demo_tile.yaml",
+      "vars_json": "{\"name\": \"萬\"}",
+      "art": [
+        "art",
+        0
+      ],
+      "art_mask": [
+        "art",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "模板合成"
+    }
+  },
+  "save": {
+    "class_type": "GASaveAsset",
+    "inputs": {
+      "image": [
+        "compose",
+        0
+      ],
+      "subfolder": "ga/compose_template",
+      "name": "asset",
+      "mask": [
+        "compose",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "保存资产"
+    }
+  }
+}

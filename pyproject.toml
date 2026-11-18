@@ -1,0 +1,75 @@
+[project]
+name = "game-art"
+version = "0.1.0"
+description = "基于 ComfyUI、厂商无关的游戏美术 AI 工作流：核心库 + ComfyUI 节点包 + CLI + 批量"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "pydantic>=2",
+    "PyYAML",
+    "Pillow>=10.1",
+    "numpy",
+]
+
+[project.optional-dependencies]
+cli = ["typer", "langgraph", "langgraph-checkpoint-sqlite"]
+rembg = ["rembg"]
+
+[project.scripts]
+ga = "game_art.cli.app:main"
+
+[dependency-groups]
+dev = ["pytest", "responses", "torch", "typer", "langgraph", "langgraph-checkpoint-sqlite", "mypy", "ruff", "types-requests", "types-PyYAML"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/game_art"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not e2e'"
+markers = ["e2e: 真实 ComfyUI + 云端密钥的端到端冒烟（默认跳过；GA_E2E=1 uv run pytest -m e2e 运行）"]
+pythonpath = ["src", "."]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src", "comfy_nodes", "tests", "examples"]
+mypy_path = ["src", "."]
+explicit_package_bases = true
+warn_unreachable = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["rembg", "rembg.*", "folder_paths", "responses.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ANN", "RUF", "SIM", "PL"]
+# 中文全角标点(RUF001-003)、复杂度阈值类(PLR09xx/PLR2004)、刻意的延迟导入(PLC0415：rembg/torch/folder_paths 可选依赖)、
+# JSON 值用 Any(ANN401) 不视为问题
+ignore = ["RUF001", "RUF002", "RUF003", "PLR0913", "PLR0917", "PLR2004", "PLR0911", "PLR0912", "PLR0915",
+          "PLC0415", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer 的惯用写法就是在参数默认值里调用 typer.Option/Argument
+"src/game_art/cli/app.py" = ["B008"]
