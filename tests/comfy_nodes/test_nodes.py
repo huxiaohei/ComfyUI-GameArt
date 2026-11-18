@@ -9,7 +9,7 @@ import pytest
 import torch
 from PIL import Image
 
-from comfy_nodes import nodes
+from comfy_nodes import common, nodes
 from comfy_nodes.tensors import pil_to_tensors, tensors_to_pils
 from game_art import imaging
 from game_art.config import Pricing, Target
@@ -64,7 +64,7 @@ def _px(im: Image.Image, xy: tuple[int, int]) -> tuple[int, ...]:
 @pytest.fixture
 def router(monkeypatch: pytest.MonkeyPatch) -> FakeRouter:
     r = FakeRouter()
-    monkeypatch.setattr(nodes, "_get_router", lambda: r)
+    monkeypatch.setattr(common, "get_router", lambda: r)
     return r
 
 
@@ -121,7 +121,7 @@ def test_generate_seed_and_empty_tag(router: FakeRouter) -> None:
 
 def test_generate_unifies_mismatched_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
     r = FakeRouter(sizes=[(8, 8), (4, 6)])
-    monkeypatch.setattr(nodes, "_get_router", lambda: r)
+    monkeypatch.setattr(common, "get_router", lambda: r)
     image, _, _ = nodes.GACloudGenerate().run(prompt="x", negative="", size="16x12", n=2)
     assert tuple(image.shape) == (2, 12, 16, 3)
 
@@ -159,7 +159,7 @@ def test_prompt_expand_meta(router: FakeRouter) -> None:
 
 def test_reference_analyze_and_qc(monkeypatch: pytest.MonkeyPatch) -> None:
     r = FakeRouter(text="好看的描述")
-    monkeypatch.setattr(nodes, "_get_router", lambda: r)
+    monkeypatch.setattr(common, "get_router", lambda: r)
     (desc,) = nodes.GAReferenceAnalyze().run(images=torch.zeros(2, 8, 8, 3))
     assert desc == "好看的描述" and len(r.calls[0][2][1].images) == 2
     r.text = '{"score":4,"issues":["糊"]}'
@@ -233,7 +233,7 @@ def test_save_asset_rejects_bad_name(out_dir: pathlib.Path) -> None:
 
 def test_ga_error_becomes_runtime_error_with_message(monkeypatch: pytest.MonkeyPatch) -> None:
     r = FakeRouter(fail=UpstreamError("all_targets_failed", "所有目标都失败了"))
-    monkeypatch.setattr(nodes, "_get_router", lambda: r)
+    monkeypatch.setattr(common, "get_router", lambda: r)
     with pytest.raises(RuntimeError, match="所有目标都失败了") as ei:
         nodes.GACloudGenerate().run(prompt="x", negative="")
     assert isinstance(ei.value.__cause__, UpstreamError)
@@ -256,13 +256,13 @@ def test_style_card_node(tmp_path: pathlib.Path) -> None:
 def test_router_cache_reloads_on_mtime_change(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = write_cfg(tmp_path)
     monkeypatch.setenv("GAME_ART_CONFIG", str(cfg))
-    monkeypatch.setattr(nodes, "_STATE", {"key": None, "router": None})
-    r1 = nodes._get_router()
-    assert nodes._get_router() is r1
+    monkeypatch.setattr(common, "_STATE", {"key": None, "router": None})
+    r1 = common.get_router()
+    assert common.get_router() is r1
     import os
     st = cfg.stat()
     os.utime(cfg, (st.st_atime, st.st_mtime + 10))
-    assert nodes._get_router() is not r1
+    assert common.get_router() is not r1
 
 
 def test_router_cache_reloads_on_dotenv_mtime_change(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,12 +271,12 @@ def test_router_cache_reloads_on_dotenv_mtime_change(tmp_path: pathlib.Path, mon
     env = tmp_path / ".env"
     env.write_text("COMFYUI_LLM_BASE_KEY=a\n")
     monkeypatch.setenv("GAME_ART_CONFIG", str(cfg))
-    monkeypatch.setattr(nodes, "_STATE", {"key": None, "router": None})
-    r1 = nodes._get_router()
-    assert nodes._get_router() is r1
+    monkeypatch.setattr(common, "_STATE", {"key": None, "router": None})
+    r1 = common.get_router()
+    assert common.get_router() is r1
     st = env.stat()
     os.utime(env, (st.st_atime, st.st_mtime + 10))
-    assert nodes._get_router() is not r1
+    assert common.get_router() is not r1
 
 
 def test_seed_max_is_js_safe_integer() -> None:
@@ -315,7 +315,7 @@ def test_chain_generate_bg_save_keeps_alpha(monkeypatch: pytest.MonkeyPatch, out
         return ImageResult(images=[im], partial=False, seed=None, raw={})
 
     monkeypatch.setattr(r, "_images", transparent_images)
-    monkeypatch.setattr(nodes, "_get_router", lambda: r)
+    monkeypatch.setattr(common, "get_router", lambda: r)
     image, mask, meta = nodes.GACloudGenerate().run(prompt="x", negative="", size="8x8", transparent=True)
     bg_img, bg_mask = nodes.GARemoveBackground().run(image=image, method="none", mask=mask)
     res = nodes.GASaveAsset().save(image=bg_img, subfolder="c", name="a", mask=bg_mask, meta=meta)

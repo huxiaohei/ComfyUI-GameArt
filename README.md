@@ -273,7 +273,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
    ┌──────────────────┐                          ┌───────────────────┐
    │ ④ 批量流程       │                          │ ② 节点            │
    │ src/game_art/    │                          │ comfy_nodes/      │
-   │ batch            │                          │ nodes.py          │
+   │ batch            │                          │ nodes/            │
    └────────┬─────────┘                          └─────────┬─────────┘
             │ 质检时直接调用                                 │ 每个节点的 run() 只是薄薄一层
             ▼                                              ▼
@@ -312,7 +312,7 @@ load_workflow ─▶ apply_sets ─▶ _fill_tags ─▶ upload ─▶ submit �
 }
 ```
 
-`class_type` 对应 `nodes.py` 里的一个类；普通值是参数；`["expand", 0]` 是连线，表示取 `expand` 节点的第 0 个输出。`--set gen.n=1` 改的就是 `gen` 节点的 `n`。
+`class_type` 对应 `comfy_nodes/nodes/` 里的一个节点类；普通值是参数；`["expand", 0]` 是连线，表示取 `expand` 节点的第 0 个输出。`--set gen.n=1` 改的就是 `gen` 节点的 `n`。
 
 **节点类的结构**都一样，读任何一个只需要看 `INPUT_TYPES`（有哪些参数）和 `run`（做了什么）：
 
@@ -372,8 +372,8 @@ class GACloudGenerate:
 | 换模型、换厂商、调画质档 | 配置文件，不用改代码 |
 | 调整 AI 扩写提示词的方式 | `src/game_art/prompts/expand.md` |
 | 增减资产类型 | `steps.py` 的 `ASSET_TYPES` |
-| 给节点加参数 | `nodes.py` 里该节点的 `INPUT_TYPES` 和 `run`；重启 ComfyUI，再 `ga comfy export-editor` |
-| 新增节点 | 在 `nodes.py` 写一个类，加进文件末尾的 `NODE_CLASS_MAPPINGS` |
+| 给节点加参数 | `comfy_nodes/nodes/<节点>.py` 里的 `INPUT_TYPES` 和 `run`；重启 ComfyUI，再 `ga comfy export-editor` |
+| 新增节点 | 在 `comfy_nodes/nodes/` 新建一个文件写节点类（公共输入定义和辅助函数在 `comfy_nodes/common.py`），再到 `comfy_nodes/nodes/__init__.py` 里登记 |
 | 改风格卡的字段 | `style.py` 的 `StyleCard` |
 | 改合成版式 | `examples/layouts/` 下的 YAML，不用改代码 |
 
