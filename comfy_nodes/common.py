@@ -93,8 +93,9 @@ class Recorder:
 
 
 def image_meta(router: Router, meta: dict[str, Any] | None, *, result: ImageResult, target: Target,
-               prompt: str, negative: str, size: str, tag: str) -> dict[str, Any]:
-    """Generate/Edit 追加 provider/model/seed/partial/size/cost。
+               prompt: str, negative: str, size: str, tag: str, refs: int = 0) -> dict[str, Any]:
+    """Generate/Edit 追加 provider/model/seed/partial/size/cost，以及这次随提示词发给模型的参考图张数 refs
+    （0 = 纯文字出图；事后排查"参考图到底有没有起作用"时先看它）。
 
     cost = 命中目标在 ledger.pricing 里的 per_image * 实际返回张数（估算；
     不读回账本，也不含此前文本调用的 token 费）。
@@ -103,7 +104,8 @@ def image_meta(router: Router, meta: dict[str, Any] | None, *, result: ImageResu
     cost: float = (pricing.per_image if pricing else 0.0) * len(result.images)
     out = dict(meta or {})
     out.update(prompt=prompt, negative=negative, tag=tag, provider=target.provider,
-               model=target.model, seed=result.seed, partial=result.partial, size=size, cost=cost)
+               model=target.model, seed=result.seed, partial=result.partial, size=size, cost=cost,
+               refs=refs)
     return out
 
 

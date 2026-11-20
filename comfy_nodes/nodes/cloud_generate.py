@@ -88,5 +88,5 @@ class GACloudGenerate:
         images = unify(result.images, wh)
         image, mask = pil_to_tensors(images)
         out_meta = image_meta(router, meta, result=result, target=target, prompt=prompt,
-                              negative=negative, size=req.size, tag=tag)
+                              negative=negative, size=req.size, tag=tag, refs=len(refs))
         return (image, mask, out_meta)

@@ -1,4 +1,8 @@
-"""参考图：一次载入多张参考图（各自保留原始尺寸），输出给「云端生图」「云端改图」「参考图分析」。"""
+"""参考图：一次载入多张参考图（各自保留原始尺寸），输出给「云端生图」「云端改图」「参考图分析」。
+
+图片有两个来源，可以混用：paths 里一行一个的文件路径；images / image_2…image_8 这几个接线口
+（编辑器里把图片拖到本节点上时，web/reference_images.js 会自动建「加载图像」节点并连上来）。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +18,9 @@ from ..common import CATEGORY, ga_errors
 from ..tensors import pil_to_tensors, tensors_to_pils
 
 _PREVIEW_EMPTY = (64, 64)
+# 接线口的名字，也是参考图的先后顺序；和 web/reference_images.js 里的 SLOT_NAMES 保持一致
+IMAGE_SLOTS: tuple[str, ...] = ("images", *(f"image_{i}" for i in range(2, 9)))
+_SLOT_TIP = "可选。接「加载图像」等节点输出的图片，作为一张参考图，排在 paths 里的图后面。"
 
 
 def _input_dir() -> Path | None:
@@ -41,6 +48,16 @@ class GAReferenceImages:
         return fingerprint(parse_ref_paths(paths, _input_dir()))
 
     @classmethod
+    def VALIDATE_INPUTS(cls, paths: str = "") -> bool | str:
+        """点运行时、任何节点开始执行之前检查：paths 里写的图片都要存在，免得前面的步骤白跑、白花钱。"""
+        problems = [f"找不到文件：{p}" if not p.exists() else f"不是文件：{p}"
+                    for p in parse_ref_paths(paths if isinstance(paths, str) else "", _input_dir())
+                    if not p.is_file()]
+        if problems:
+            return "参考图路径有问题，请检查「参考图」节点的 paths：\n" + "\n".join(problems)
+        return True
+
+    @classmethod
     def INPUT_TYPES(cls) -> dict[str, Any]:
         return {
             "required": {"paths": ("STRING", {"default": "", "multiline": True, "placeholder": (
@@ -54,16 +71,24 @@ class GAReferenceImages:
                 "· 空行和以 # 开头的行会被忽略，临时不想用某张图时在行首加 # 即可。\n"
                 "· 参考图里最显眼的东西（人物、兵器、姿势）容易被模型照搬。只想统一画风时，"
                 "放几张内容不同、画风相同的图，并在描述里写明哪些地方按文字重新设计。")})},
-            "optional": {"images": ("IMAGE", {"tooltip": (
-                "可选。接「加载图像」等节点输出的图片，会排在 paths 里的图后面一起作为参考图。"
-                "想用编辑器的选图按钮挑文件、或者把上一步生成的图直接当参考图时用它。")})},
+            "optional": {
+                "images": ("IMAGE", {"tooltip": (
+                    _SLOT_TIP + "把图片文件直接拖到本节点上，会自动建好「加载图像」节点并连到这里；"
+                    "想把上一步生成的图直接当参考图时，也接到这里。")}),
+                **{name: ("IMAGE", {"tooltip": _SLOT_TIP + "接满一个会自动多出一个空位，最多 8 个。"})
+                   for name in IMAGE_SLOTS[1:]},
+            },
         }
 
     @ga_errors
-    def run(self, paths: str = "", images: torch.Tensor | None = None) -> tuple[list[Image.Image], torch.Tensor]:
+    def run(self, paths: str = "", images: torch.Tensor | None = None,
+            **more: torch.Tensor | None) -> tuple[list[Image.Image], torch.Tensor]:
         refs = load_ref_images(parse_ref_paths(paths, _input_dir()))
-        if images is not None:
-            refs += [im.convert("RGBA") for im in tensors_to_pils(images)]
+        slots: dict[str, torch.Tensor | None] = {"images": images, **more}
+        for name in IMAGE_SLOTS:
+            tensor = slots.get(name)
+            if tensor is not None:
+                refs += [im.convert("RGBA") for im in tensors_to_pils(tensor)]
         if not refs:
             return (refs, torch.zeros((1, _PREVIEW_EMPTY[1], _PREVIEW_EMPTY[0], 3)))
         size = refs[0].size

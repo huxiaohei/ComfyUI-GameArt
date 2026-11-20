@@ -135,11 +135,16 @@ def test_generate_with_refs_switches_to_edit(router: FakeRouter, tmp_path: pathl
     kind, profile, req, _ = router.calls[0]
     assert kind == "edit" and profile == "my_edit"
     assert [r.size for r in req.refs] == [(4, 4), (6, 2)]  # 多张、各自保留原始尺寸
+    # 元数据里记下发了几张参考图，方便事后确认参考图有没有真的发出去
+    assert nodes.GACloudGenerate().run(prompt="x", negative="", refs=refs)[2]["refs"] == 2
+    assert nodes.GACloudGenerate().run(prompt="x", negative="")[2]["refs"] == 0
+    assert nodes.GACloudEdit().run(prompt="x", refs=refs, images=torch.zeros(1, 8, 8, 3))[2]["refs"] == 3
+    router.calls.clear()
     # 不接参考图、或参考图节点为空时仍走 generate
     nodes.GACloudGenerate().run(prompt="x", negative="")
     empty, _ = nodes.GAReferenceImages().run(paths="")
     nodes.GACloudGenerate().run(prompt="x", negative="", refs=empty)
-    assert [c[0] for c in router.calls[1:]] == ["generate", "generate"]
+    assert [c[0] for c in router.calls] == ["generate", "generate"]
 
 
 def test_reference_images_node(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,6 +171,33 @@ def test_reference_images_node(tmp_path: pathlib.Path, monkeypatch: pytest.Monke
     (tmp_path / "bad.png").write_text("not an image")
     with pytest.raises(RuntimeError, match="无法读取参考图"):
         nodes.GAReferenceImages().run(paths=str(tmp_path / "bad.png"))
+
+
+def test_reference_images_extra_image_slots(tmp_path: pathlib.Path) -> None:
+    """拖图进来时每张图占一个接线口；顺序是 paths → images → image_2 … image_8，和连线先后无关。"""
+    cls: Any = nodes.GAReferenceImages
+    optional = cls.INPUT_TYPES()["optional"]
+    assert list(optional) == ["images", *(f"image_{i}" for i in range(2, 9))]
+    assert all(spec[0] == "IMAGE" for spec in optional.values())
+    a = tmp_path / "a.png"
+    Image.new("RGB", (9, 9)).save(a)
+    refs, preview = cls().run(paths=str(a), image_3=torch.zeros(1, 3, 3, 3), images=torch.zeros(1, 1, 1, 3),
+                              image_2=None, image_8=torch.zeros(2, 8, 8, 3))
+    assert [r.size for r in refs] == [(9, 9), (1, 1), (3, 3), (8, 8), (8, 8)] and preview.shape[0] == 5
+
+
+def test_reference_images_validates_paths_before_run(tmp_path: pathlib.Path) -> None:
+    """VALIDATE_INPUTS 在点运行时、任何节点执行前被调用：路径不对要当场拦下，并说清是哪一个。"""
+    cls: Any = nodes.GAReferenceImages
+    ok = tmp_path / "ok.png"
+    Image.new("RGB", (2, 2)).save(ok)
+    assert cls.VALIDATE_INPUTS(paths="") is True
+    assert cls.VALIDATE_INPUTS(paths=f"{ok}\n# {tmp_path / 'ignored.png'}\n") is True
+    msg = cls.VALIDATE_INPUTS(paths=f"{ok}\n{tmp_path / 'nope.png'}\n{tmp_path}")
+    assert isinstance(msg, str) and "参考图" in msg and "paths" in msg
+    assert f"找不到文件：{tmp_path / 'nope.png'}" in msg and f"不是文件：{tmp_path}" in msg
+    assert str(ok) not in msg
+    assert cls.VALIDATE_INPUTS() is True  # paths 被连线接管时不会传进来
 
 
 def test_reference_images_is_changed_follows_files(tmp_path: pathlib.Path) -> None:

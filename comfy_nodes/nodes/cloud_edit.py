@@ -88,5 +88,5 @@ class GACloudEdit:
         result, target = router.edit(profile, req, tag=tag)
         image, out_mask = pil_to_tensors(unify(result.images, wh))
         out_meta = image_meta(router, meta, result=result, target=target, prompt=prompt,
-                              negative=negative, size=req.size, tag=tag)
+                              negative=negative, size=req.size, tag=tag, refs=len(all_refs))
         return (image, out_mask, out_meta)
