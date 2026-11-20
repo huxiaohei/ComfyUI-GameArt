@@ -4,10 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from game_art.errors import InputError
 from game_art.paths import resolve_repo_path
 from game_art.style import StyleCard, load_style_card
 
 from ..common import CATEGORY, ga_errors
+
+# 把 .yaml 拖到节点上、又拿不到文件完整路径时，编辑器在 path 里填 "拖入:<文件名>"，只用来显示这张卡是哪来的；
+# 内容在 edit 里。要和 web/style_card.js 里的 DROPPED_PREFIX 保持一致。
+DROPPED_PREFIX = "拖入:"
 
 
 class GAStyleCard:
@@ -26,7 +31,9 @@ class GAStyleCard:
             "required": {"path": ("STRING", {"default": "", "tooltip": (
                 "风格卡文件（.yaml）的路径。以 @repo/ 开头表示本项目目录下的文件，"
                 "例如 @repo/examples/style_cards/guochao.yaml；也可以写电脑上的完整路径。"
-                "如果下面的编辑框里已经写了完整的风格内容，这里可以留空。")})},
+                "如果下面的编辑框里已经写了完整的风格内容，这里可以留空。\n"
+                "也可以把 .yaml 文件直接拖到本节点上。拿不到文件的完整路径时这里会显示「拖入:文件名」，"
+                "表示内容已经在下面的编辑框里、不再读文件；之后文件有改动，需要重新拖一次。")})},
             "optional": {"edit": ("STRING", {"default": "", "multiline": True, "placeholder": (
                 "在这里直接编辑风格（可留空）。写了的字段会覆盖文件里的同名字段，例如：\n"
                 "positive: 国潮插画, 平涂上色, 描金线条\n"
@@ -42,5 +49,12 @@ class GAStyleCard:
 
     @ga_errors
     def run(self, path: str = "", edit: str = "") -> tuple[StyleCard]:
-        file = Path(resolve_repo_path(path.strip())) if path.strip() else None
+        path = path.strip()
+        if path.startswith(DROPPED_PREFIX):
+            if not edit.strip():
+                raise InputError("bad_style_card", (
+                    f"这张风格卡（{path[len(DROPPED_PREFIX):].strip()}）是拖进来的，内容应该在编辑框里，但编辑框是空的。"
+                    "请把文件重新拖到节点上，或者在 path 里填它的完整路径。"))
+            path = ""
+        file = Path(resolve_repo_path(path)) if path else None
         return (load_style_card(file, edit),)

@@ -487,6 +487,14 @@ def test_style_card_node_accepts_inline_edit(tmp_path: Path) -> None:
         nodes.GAStyleCard().run(path=" ", edit="")
 
 
+def test_style_card_node_dropped_file_marker(tmp_path: Path) -> None:
+    """拖进来的风格卡：path 只是显示用的「拖入:文件名」，内容全在编辑框里，不去读文件。"""
+    (card,) = nodes.GAStyleCard().run(path=" 拖入:my_card.yaml ", edit="name: 拖\ndescription: d\npositive: p\n")
+    assert card.name == "拖" and card.positive == "p"
+    with pytest.raises(RuntimeError, match=r"my_card\.yaml.*重新拖"):
+        nodes.GAStyleCard().run(path="拖入:my_card.yaml", edit="  ")
+
+
 def test_style_card_text_route_helper(tmp_path: pathlib.Path) -> None:
     from comfy_nodes import WEB_DIRECTORY, routes
 
