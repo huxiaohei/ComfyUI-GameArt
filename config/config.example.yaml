@@ -10,7 +10,8 @@ providers:
     base_url: https://aihubmix.com/v1
     api_key_env: COMFYUI_LLM_BASE_KEY
     # aihubmix 的 /v1/models 不列出 gpt-image-1，但 /v1/images/generations 实际支持（2026-11 实测）
-    unlisted_models: [gpt-image-1]
+    # gpt-image-2 / 2.5-sunburst / 2.6-sunburst 同样不在列表里，改图接口实测可用（2026-11）
+    unlisted_models: [gpt-image-1, gpt-image-2, gpt-image-2.5-sunburst, gpt-image-2.6-sunburst]
     # 这些模型走 Gemini 原生出图接口（它们不认 OpenAI 的 /images/generations）。支持通配符。
     # 尺寸会换算成最接近的宽高比（1536x1024 → 3:2）；不支持透明背景和遮罩局部重绘。
     gemini_image_models: ["gemini-*"]
