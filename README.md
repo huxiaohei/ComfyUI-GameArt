@@ -72,6 +72,7 @@
 | 工作流 | 做什么 | 流程 |
 |---|---|---|
 | `text_to_asset` | 文案（+ 可选参考图）→ 资源 | 风格卡 → 提示词扩写 → 云端生图（参考图节点里有图时按参考图生图）→ 去背景 → 保存 |
+| `text_to_asset_qc` | 同上，出图后先质检，可按问题反复修订 | 风格卡 → 提示词扩写 → 云端生图 → **质检结果** → 去背景 → 保存 |
 | `ref_to_asset` | 参考图 + 文案 → 资源 | 参考图 → 参考图分析 + 风格卡 → 提示词扩写 → 云端改图 → 去背景 → 保存 |
 | `style_samples` | 先看风格再定：一次出 4 张样张 | 风格卡 → 提示词扩写 → 云端生图（可带参考图）→ 保存 |
 | `compose_template` | 把素材图和文字按版式合成一张成品 | 载入素材 → 模板合成 → 保存 |
@@ -88,6 +89,7 @@
 | 云端改图 `GACloudEdit` | 以参考图为基础出图或改图 | 出图模型 |
 | 去背景 `GARemoveBackground` | 本机抠图得到透明底 | 否 |
 | 质检打分 `GAQCScore` | 给成品打分并给出理由 | 看图模型 |
+| 质检结果 `GAQCReview` | 放在保存前：给每张图打分、列出问题，勾选问题后带回扩写再出一版 | 看图模型 |
 | 模板合成 `GAComposeTemplate` | 按版式文件把底框、图案、文字拼成成品 | 否 |
 | 保存资产 `GASaveAsset` | 写出 PNG 和同名 `.json` 元数据；可选清理半透明残留 | 否 |
 
@@ -107,6 +109,15 @@
 **清理半透明残留**：「保存资产」的 `clean_alpha`（0–255，默认 0 不清理）。大于 0 时，透明度低于这个值、又不紧贴主体的像素会被擦成全透明，用来去掉模型画在主体脚下的淡阴影和抠图留下的雾边，淡阴影一般用 64–128。只对带透明底的图有效；薄纱、烟雾、光晕这类本来就该半透明的素材保持 0。用了它时，数值会写进图片旁边的 `.json`。
 
 **保存位置**：「保存资产」的 `subfolder` 有两种写法。相对路径（如 `ga/text_to_asset`）是 ComfyUI 输出目录下的子文件夹；完整路径（如 `/Users/me/project/art`）是电脑上的任意文件夹，图片和 `.json` 直接存到那里，比如游戏项目的美术目录，这时输出目录里不留副本，编辑器里的预览用的是临时目录里的一份拷贝。在编辑器里点一下 `subfolder` 这一栏，会弹出系统自带的文件夹选择窗口；选中的文件夹在输出目录里面时自动写成相对路径，其余写完整路径。想手动输入时按住 Shift 再点，或者在右侧的属性面板里改。不支持把文件夹拖到节点上，因为网页拿不到被拖入文件夹在硬盘上的位置。保存位置或 `name` 写错时，点运行就会报错，不会等图出完才发现。`ga run` 只会把输出目录里的成品下载到 `--out`；`subfolder` 写了完整路径时，成品已经在那个文件夹里，不再下载。
+
+**质检和修订**（工作流 `text_to_asset_qc`）：「质检结果」节点放在「保存资产」前面，图片原样往下传，不管得分多少都会保存。运行完后节点上会显示：
+
+- 每张图的得分和问题，每条问题前面有一个开关，标着"必须改"或"建议"。一次出多张时，上方是缩略图，点哪张看哪张；下方另有"整批的共性问题"（多张图都出现的）。
+- 「我的补充」：质检没看出来、但你想改的地方，一行一条。
+- 「采纳并重新生成」：把勾选的问题和补充追加到「提示词扩写」的 `feedback`，然后自动再运行一次。扩写时模型会把每条意见改写成正面的画面描述并入提示词。什么都不勾直接点运行，就是原样再出一版。
+- 「清空修订意见」：清空 `feedback`。意见是逐轮累积的（免得上一轮修好的问题又冒出来），换了素材或想从头再来时点它。
+
+默认勾选的规则：只出一张图时勾"必须改"的问题；一次出多张时只勾过半数图片都有的共性问题。及格线默认 7 分，只影响显示成"通过"还是"未通过"。
 
 **资产类型**：`icon`、`prop`、`character`、`ui_element`、`background`、`illustration`。完整场景选 `background` 或 `illustration`，其余类型会要求主体居中、背景干净。
 
@@ -199,7 +210,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
                    sheet ──▶ select（停下来等你挑） ──▶ finalize
 ```
 
-清单格式见 `examples/manifests/smoke.yaml`：`batch_id`、`workflow`、`style_card`、`candidates`（每项候选数）、`qc_threshold`（及格线）、`max_retries`、`budget`（美元）、`defaults`、`items[].{id, brief, sets}`。项 `id` 只能含字母、数字、汉字和 `_ - .`，不能以 `_<数字>` 结尾，不能重复。
+清单格式见 `examples/manifests/smoke.yaml`：`batch_id`、`workflow`、`style_card`、`candidates`（每项候选数）、`qc_threshold`（及格线，默认 7）、`max_retries`、`budget`（美元）、`defaults`、`items[].{id, brief, sets}`。项 `id` 只能含字母、数字、汉字和 `_ - .`，不能以 `_<数字>` 结尾，不能重复。
 
 批次目录：
 
@@ -355,6 +366,7 @@ class GACloudGenerate:
 | `GACloudGenerate` / `GACloudEdit` | `router.generate` / `router.edit` | `providers/router.py` |
 | `GARemoveBackground` | `remove_background` | `imaging.py` |
 | `GAQCScore` | `qc_score` | `steps.py`，模板在 `prompts/qc.md` |
+| `GAQCReview` | `qc_score`、`common_issues` | `steps.py`，模板在 `prompts/qc.md`、`prompts/common_issues.md`；节点上的面板在 `comfy_nodes/web/qc_review.js` |
 | `GAComposeTemplate` | `compose` | `compose.py` |
 | `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha` | 写文件的逻辑在节点里，清理在 `imaging.py` |
 
