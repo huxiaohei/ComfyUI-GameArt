@@ -6,10 +6,10 @@ import math
 import re
 from importlib import resources
 from string import Template
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import Target
 from .errors import InputError, UpstreamError
@@ -30,10 +30,23 @@ class ExpandedPrompt(BaseModel):
     negative: str
 
 
+class QCIssue(BaseModel):
+    """一条质检问题。level：must = 不改不能用；suggest = 改了更好的建议。"""
+    text: str
+    level: Literal["must", "suggest"] = "must"
+
+
 class QCResult(BaseModel):
     score: float
-    issues: list[str]
+    issues: list[str]  # 只有文字，和 details 一一对应（批量流程和旧记录用它）
     passed: bool
+    details: list[QCIssue] = Field(default_factory=list)
+
+
+class CommonIssue(BaseModel):
+    """多张图共有的问题：count = 有几张图出现了它。"""
+    text: str
+    count: int
 
 
 def _template(name: str) -> Template:
@@ -57,6 +70,21 @@ def _parse_json(text: str) -> dict[str, Any]:
 
 def _style_text(style: StyleCard | None) -> str:
     return style.to_prompt_text() if style else "（无风格卡）"
+
+
+def feedback_lines(feedback: str) -> list[str]:
+    """修订意见拆成一条条：去掉空行、行首的列表符号和重复项，保持先后顺序。"""
+    out: list[str] = []
+    for raw in (feedback or "").splitlines():
+        line = raw.strip().lstrip("-•*·").strip()
+        if line and line not in out:
+            out.append(line)
+    return out
+
+
+def _feedback_text(feedback: str) -> str:
+    lines = feedback_lines(feedback)
+    return "（无）" if not lines else "".join(f"\n  {i}. {line}" for i, line in enumerate(lines, 1))
 
 
 def _merge(base: str, extra: str) -> str:
@@ -83,10 +111,12 @@ def describe_asset_type(asset_type: str) -> str:
 
 
 def expand_prompt(router: ChatRouter, brief: str, *, asset_type: str, style: StyleCard | None,
-                  ref_description: str = "", tag: str, profile: str = "text") -> ExpandedPrompt:
+                  ref_description: str = "", feedback: str = "", tag: str,
+                  profile: str = "text") -> ExpandedPrompt:
+    """feedback：上一版图片的修订意见（质检问题 + 使用者补充），一行一条；空 = 第一次出图。"""
     system = _template("expand.md").safe_substitute(
         brief=brief, asset_type=describe_asset_type(asset_type), style=_style_text(style),
-        ref_description=ref_description or "（无）")
+        ref_description=ref_description or "（无）", feedback=_feedback_text(feedback))
     messages = [Message(role="system", text=system),
                 Message(role="user", text=brief)]
     last_err = ""
@@ -125,27 +155,79 @@ def analyze_reference(router: ChatRouter, images: list[Image.Image], *, focus: s
     return res.text.strip()
 
 
+DEFAULT_QC_THRESHOLD = 7.0  # 和 qc.md 的评分标准一致：7 分起才算"可用"
+
+
+def _parse_issues(raw: Any) -> list[QCIssue]:
+    """issues 的每一项可以是 {"text", "level"}，也可以是一句话（旧格式，按 must 处理）。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("issues 不是列表")
+    out: list[QCIssue] = []
+    for item in raw:
+        if isinstance(item, str):
+            text, level = item, "must"
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            text, level = item["text"], item.get("level", "must")
+        else:
+            raise ValueError("issues 里有一项既不是字符串也不是带 text 的对象")
+        text = text.strip()
+        if text:
+            out.append(QCIssue(text=text, level="suggest" if level == "suggest" else "must"))
+    return out
+
+
 def qc_score(router: ChatRouter, img: Image.Image, *, brief: str, style: StyleCard | None,
-             threshold: float = 6.0, tag: str, profile: str = "vision") -> QCResult:
+             threshold: float = DEFAULT_QC_THRESHOLD, tag: str, profile: str = "vision") -> QCResult:
     system = _template("qc.md").safe_substitute(brief=brief, style=_style_text(style))
     messages = [Message(role="system", text=system),
                 Message(role="user", text="请按要求给这张图打分。", images=[flatten_for_review(img)])]
     res, _target = router.chat(profile, messages, tag=tag, json_mode=True)
     try:
         obj = _parse_json(res.text)
-        raw_score, raw_issues = obj["score"], obj.get("issues")
+        raw_score = obj["score"]
         if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
             raise ValueError("score 不是数字")
         score = float(raw_score)
         if not math.isfinite(score):
             raise ValueError("score 不是有限数")
-        if raw_issues is None:
-            raw_issues = []
-        if not isinstance(raw_issues, list) or not all(isinstance(i, str) for i in raw_issues):
-            raise ValueError("issues 不是字符串列表")
-        issues = raw_issues
+        details = _parse_issues(obj.get("issues"))
     except (ValueError, KeyError, TypeError) as e:
         raise UpstreamError("bad_llm_json",
                             f"质检返回的不是合法 JSON: {e}; 原始输出: {res.text[:200]!r}") from e
     score = max(0.0, min(10.0, score))
-    return QCResult(score=score, issues=issues, passed=score >= threshold)
+    return QCResult(score=score, issues=[d.text for d in details], passed=score >= threshold, details=details)
+
+
+def common_issues(router: ChatRouter, per_image: list[list[str]], *, tag: str,
+                  profile: str = "text") -> list[CommonIssue]:
+    """把多张图各自的问题归并成"共性问题"：意思相同的算同一条，统计有几张图出现；只返回至少两张图都有的。
+
+    不足两张图有问题时不调用模型，直接返回空列表。
+    """
+    if sum(1 for issues in per_image if issues) < 2:
+        return []
+    listing = "\n".join(f"第 {i} 张：" + ("；".join(issues) if issues else "（无问题）")
+                        for i, issues in enumerate(per_image, 1))
+    system = _template("common_issues.md").safe_substitute(count=len(per_image))
+    messages = [Message(role="system", text=system), Message(role="user", text=listing)]
+    res, _target = router.chat(profile, messages, tag=tag, json_mode=True)
+    try:
+        raw = _parse_json(res.text).get("common")
+        if not isinstance(raw, list):
+            raise ValueError("common 不是列表")
+        out: list[CommonIssue] = []
+        for item in raw:
+            if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+                raise ValueError("common 里有一项不是带 text 的对象")
+            images = item.get("images")
+            if not isinstance(images, list):
+                raise ValueError("common 里有一项缺少 images 列表")
+            hit = {n for n in images if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= len(per_image)}
+            if len(hit) >= 2 and item["text"].strip():
+                out.append(CommonIssue(text=item["text"].strip(), count=len(hit)))
+    except (ValueError, KeyError, TypeError) as e:
+        raise UpstreamError("bad_llm_json",
+                            f"归并共性问题时返回的不是合法 JSON: {e}; 原始输出: {res.text[:200]!r}") from e
+    return sorted(out, key=lambda c: -c.count)

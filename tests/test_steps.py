@@ -7,7 +7,7 @@ from PIL import Image
 from game_art.config import Target
 from game_art.errors import InputError, UpstreamError
 from game_art.providers.base import ChatResult, Message
-from game_art.steps import analyze_reference, expand_prompt, qc_score
+from game_art.steps import analyze_reference, common_issues, expand_prompt, feedback_lines, qc_score
 from game_art.style import StyleCard, load_style_card
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -192,3 +192,69 @@ def test_style_card_blank_fields_mean_not_set(tmp_path: Path) -> None:
     with pytest.raises(InputError) as e2:
         load_style_card(card, "palette: 红色\n")
     assert "palette" in e2.value.message and "列表" in e2.value.message
+
+
+def test_qc_default_threshold_matches_rubric() -> None:
+    """评分标准写的是 7 分起可用：默认及格线也是 7，6 分不算通过。"""
+    img = Image.new("RGB", (4, 4))
+    assert not qc_score(FakeRouter('{"score":6,"issues":[]}'), img, brief="龙", style=None, tag="t").passed
+    assert qc_score(FakeRouter('{"score":7,"issues":[]}'), img, brief="龙", style=None, tag="t").passed
+
+
+def test_qc_issue_levels() -> None:
+    """每条问题带级别；旧格式（一句话）按"必须改"处理；issues 和 details 一一对应。"""
+    text = ('{"score":5,"issues":[{"text":" 头顶贴边 ","level":"must"},{"text":"袖口可以更细","level":"suggest"},'
+            '"老格式",{"text":"没写级别"},{"text":"  ","level":"must"},{"text":"乱写级别","level":"x"}]}')
+    r = qc_score(FakeRouter(text), Image.new("RGB", (4, 4)), brief="龙", style=None, tag="t")
+    assert r.issues == ["头顶贴边", "袖口可以更细", "老格式", "没写级别", "乱写级别"]
+    assert [d.level for d in r.details] == ["must", "suggest", "must", "must", "must"]
+    assert [d.text for d in r.details] == r.issues
+
+
+def test_qc_prompt_explains_checkerboard() -> None:
+    """透明底是叠在棋盘格上给模型看的：提示词里要说明棋盘格不是问题，否则会被误报成"背景不是纯色"。"""
+    router = FakeRouter('{"score":8,"issues":[]}')
+    qc_score(router, Image.new("RGBA", (8, 8), (0, 0, 0, 0)), brief="纯色背景的龙", style=None, tag="t")
+    system = router.calls[0]["messages"][0].text
+    assert "棋盘格就是透明区域" in system and "纯色背景的龙" in system
+
+
+def test_feedback_lines() -> None:
+    assert feedback_lines("") == [] and feedback_lines("  \n\n") == []
+    text = "- 头顶贴边\n\n• 步摇不精致 \n头顶贴边\n* 飘带短一些"
+    assert feedback_lines(text) == ["头顶贴边", "步摇不精致", "飘带短一些"]
+
+
+def test_expand_passes_feedback_to_model() -> None:
+    router = FakeRouter('{"prompt":"a","negative":"b"}')
+    expand_prompt(router, "貂蝉", asset_type="character", style=None, feedback="头顶贴边\n- 步摇不精致", tag="t")
+    system = router.calls[0]["messages"][0].text
+    assert "1. 头顶贴边" in system and "2. 步摇不精致" in system and "$feedback" not in system
+    expand_prompt(router, "貂蝉", asset_type="character", style=None, tag="t")
+    assert "修订意见：（无）" in router.calls[1]["messages"][0].text
+
+
+def test_common_issues() -> None:
+    reply = ('{"common":[{"text":"脚下留白不足","images":[1,2,3,3]},{"text":"只有一张","images":[2]},'
+             '{"text":"头顶贴边","images":[1,2,3,4,9,true]},{"text":" ","images":[1,2]}]}')
+    router = FakeRouter(reply)
+    per_image = [["a", "b"], ["c"], ["d"], []]
+    got = common_issues(router, per_image, tag="t")
+    # 编号去重、越界和非数字的丢掉；不足两张的不算共性；按出现张数从多到少排
+    assert [(c.text, c.count) for c in got] == [("头顶贴边", 4), ("脚下留白不足", 3)]
+    sent = router.calls[0]["messages"][1].text
+    assert "第 1 张：a；b" in sent and "第 4 张：（无问题）" in sent
+    assert "共 4 张" in router.calls[0]["messages"][0].text
+
+
+def test_common_issues_skips_model_when_nothing_to_merge() -> None:
+    router = FakeRouter("不该被调用")
+    assert common_issues(router, [["a"], [], []], tag="t") == [] and common_issues(router, [], tag="t") == []
+    assert router.calls == []
+
+
+@pytest.mark.parametrize("bad", ["x", "{}", '{"common":"a"}', '{"common":[1]}', '{"common":[{"text":"a"}]}'])
+def test_common_issues_rejects_garbage(bad: str) -> None:
+    with pytest.raises(UpstreamError) as e:
+        common_issues(FakeRouter(bad), [["a"], ["b"]], tag="t")
+    assert e.value.code == "bad_llm_json"

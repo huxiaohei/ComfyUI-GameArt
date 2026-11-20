@@ -30,7 +30,7 @@ def test_manifest_relative_paths_resolved(tmp_path: Path) -> None:
     m = load_manifest(p)
     assert m.workflow == (tmp_path / "m" / "wf.json").resolve()
     assert m.style_card == (tmp_path / "cards" / "s.yaml").resolve()
-    assert m.candidates == 2 and m.qc_threshold == 6.0 and m.max_retries is None and m.budget is None
+    assert m.candidates == 2 and m.qc_threshold == 7.0 and m.max_retries is None and m.budget is None
     assert m.items[0].sets == {} and m.defaults == {}
 
 

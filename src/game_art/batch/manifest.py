@@ -51,7 +51,7 @@ class Manifest(BaseModel):
     style_card: Path | None = None
     defaults: dict[str, Any] = Field(default_factory=dict)
     candidates: int = Field(2, ge=1)
-    qc_threshold: float = 6.0
+    qc_threshold: float = 7.0
     max_retries: int | None = Field(None, ge=0)
     budget: float | None = Field(None, ge=0)
     items: list[Item] = Field(min_length=1)

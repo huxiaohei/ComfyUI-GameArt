@@ -4,7 +4,7 @@ batch_id: smoke
 workflow: ../../workflows/text_to_asset.json
 style_card: ../style_cards/guochao.yaml
 candidates: 2
-qc_threshold: 6.0
+qc_threshold: 7.0
 budget: 2.0
 defaults:
   gen.size: 1024x1024

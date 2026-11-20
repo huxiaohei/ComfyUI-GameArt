@@ -33,7 +33,7 @@ class GAQCScore:
                 "image": ("IMAGE", {"tooltip": "要打分的图片。一次给了多张时只给第一张打分。"}),
                 "brief": ("STRING", {"multiline": True, "default": "", "tooltip": (
                     "这张图原本想要什么（和「提示词扩写」里写的描述一致），模型据此判断画得对不对。")}),
-                "threshold": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 10.0, "step": 0.5, "tooltip": (
+                "threshold": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 10.0, "step": 0.5, "tooltip": (
                     "及格线，0 到 10 分。得分不低于它算通过。调高更严格，会有更多图被判为不合格。")}),
                 "profile": model_input("vision", "看图质检"),
             },
@@ -45,7 +45,7 @@ class GAQCScore:
         }
 
     @ga_errors
-    def run(self, image: torch.Tensor, brief: str, threshold: float = 6.0, profile: str = "vision",
+    def run(self, image: torch.Tensor, brief: str, threshold: float = 7.0, profile: str = "vision",
             style: StyleCard | None = None, tag: str = "",
             mask: torch.Tensor | None = None) -> tuple[float, str]:
         img = tensors_to_pils(image[:1], mask[:1] if mask is not None else None)[0]
