@@ -44,6 +44,7 @@ def build_body(req: ImageRequest, prompt: str) -> dict[str, Any]:
     if image_size:
         image_config["imageSize"] = str(image_size)
     params.pop("quality", None)  # 这是 OpenAI 图片接口的参数，Gemini 不认
+    params.pop("input_fidelity", None)  # 同上：OpenAI 改图接口的"保真度"
     parts: list[dict[str, Any]] = [{"text": prompt}]
     parts += [{"inlineData": {"mimeType": "image/png",
                               "data": base64.b64encode(to_png_bytes(img)).decode("ascii")}}

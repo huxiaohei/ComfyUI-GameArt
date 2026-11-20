@@ -13,7 +13,7 @@ from comfy_nodes import common, nodes
 from comfy_nodes.tensors import pil_to_tensors, tensors_to_pils
 from game_art import imaging
 from game_art.config import Pricing, Target
-from game_art.errors import UpstreamError
+from game_art.errors import InputError, UpstreamError
 from game_art.providers.base import ChatResult, ImageRequest, ImageResult, Message
 from game_art.style import StyleCard
 from tests.conftest import write_cfg
@@ -291,8 +291,54 @@ def test_prompt_expand_feedback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "feedback" not in meta  # 没有修订意见时不往记录里写
 
 
+def test_prompt_expand_takes_brief_from_list(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    r = FakeRouter()
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    opt = nodes.GAPromptExpand.INPUT_TYPES()["optional"]
+    assert opt["briefs_path"][0] == "STRING" and opt["item"][0] == "STRING"
+    f = tmp_path / "list.yaml"
+    f.write_text("asset_type: character\nprefix: 全身入画。\nitems:\n  - {id: guanyu, brief: 关羽}\n"
+                 "  - {id: tower, brief: 箭塔, asset_type: prop}\n", encoding="utf-8")
+    run = nodes.GAPromptExpand().run
+    # 命令行用法：brief 留空，按 item 从清单里取（描述带公共文字，素材种类跟着清单走）
+    *_, meta = run(brief="", asset_type="icon", briefs_path=str(f), item="tower")
+    assert meta["brief"] == "全身入画。箭塔" and meta["item"] == "tower"
+    assert "prop" in r.calls[0][2][0].text and "全身入画。箭塔" in r.calls[0][2][0].text
+    *_, meta = run(brief="", asset_type="icon", briefs_path=str(f), item=" guanyu ")
+    assert meta["brief"] == "全身入画。关羽" and "character" in r.calls[1][2][0].text
+    # 编辑器用法：选完以后 brief 里已经有字（还可能被改过），以 brief 为准，不再读文件
+    *_, meta = run(brief="我改过的关羽", asset_type="icon", briefs_path="拖入:list.yaml", item="guanyu")
+    assert meta["brief"] == "我改过的关羽" and meta["item"] == "guanyu"
+    *_, meta = run(brief="龙", asset_type="icon")
+    assert "item" not in meta
+    with pytest.raises(RuntimeError, match="没有 'x' 这一项"):
+        run(brief="", asset_type="icon", briefs_path=str(f), item="x")
+    for path, item in (("", ""), ("", "guanyu"), ("拖入:list.yaml", "guanyu")):
+        with pytest.raises(RuntimeError, match="没有描述"):
+            run(brief=" ", asset_type="icon", briefs_path=path, item=item)
+
+
+def test_briefs_route_helper(tmp_path: pathlib.Path) -> None:
+    from comfy_nodes import routes
+    text = ("asset_type: icon\nprefix: 居中。\nitems:\n  - {id: a, brief: 甲}\n"
+            "  - {id: b, brief: 乙, asset_type: prop}\n")
+    want = {"items": [{"id": "a", "brief": "居中。甲", "asset_type": "icon"},
+                      {"id": "b", "brief": "居中。乙", "asset_type": "prop"}]}
+    assert routes.briefs_items(text=text) == want  # 拖进来的内容
+    f = tmp_path / "l.yaml"
+    f.write_text(text, encoding="utf-8")
+    assert routes.briefs_items(path=f" {f} ") == want
+    assert [i["id"] for i in routes.briefs_items(path="@repo/examples/briefs/demo.yaml")["items"]] == [
+        "coin", "cloud", "lantern"]
+    with pytest.raises(InputError, match="没有填写"):
+        routes.briefs_items()
+    with pytest.raises(InputError, match="不是一份描述清单"):
+        routes.briefs_items(text="name: x")
+
+
 def test_qc_review_single_image(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
-    r = SeqRouter('{"score":6,"issues":[{"text":"头顶贴边","level":"must"},{"text":"袖口再细些","level":"suggest"}]}')
+    r = SeqRouter('{"score":6,"issues":[{"text":"头顶贴边","level":"must","kind":"layout"},'
+                  '{"text":"袖口再细些","level":"suggest"}]}')
     monkeypatch.setattr(common, "get_router", lambda: r)
     image, mask = torch.rand(1, 8, 6, 3), torch.zeros(1, 8, 6)
     out = nodes.GAQCReview().run(image=image, mask=mask, meta={"brief": "貂蝉", "tag": "b/1", "prompt": "p"})
@@ -304,10 +350,16 @@ def test_qc_review_single_image(monkeypatch: pytest.MonkeyPatch, temp_dir: pathl
     (ui,) = out["ui"]["ga_qc"]
     assert ui["threshold"] == 7.0 and ui["common"] == [] and len(ui["results"]) == 1
     res = ui["results"][0]
-    assert res["passed"] is False and res["issues"] == [{"text": "头顶贴边", "level": "must"},
-                                                        {"text": "袖口再细些", "level": "suggest"}]
+    assert res["passed"] is False and res["issues"] == [
+        {"text": "头顶贴边", "level": "must", "kind": "layout"},
+        {"text": "袖口再细些", "level": "suggest", "kind": "detail"}]
     thumb = res["thumb"]
     assert thumb["type"] == "temp" and (temp_dir / thumb["subfolder"] / thumb["filename"]).is_file()
+    # 原图和它的记录也存了一份，之后「修这张」拿它当底图
+    stored = temp_dir / thumb["subfolder"] / res["full"]
+    with Image.open(stored) as kept:
+        assert kept.size == (6, 8)
+    assert json.loads(stored.with_suffix(".json").read_text())["prompt"] == "p"
     # 只有一张图：不调用归并；描述取自 meta，记账标签沿用 meta 里的
     assert [(c[0], c[1], c[3]) for c in r.calls] == [("chat", "vision", "b/1")]
     assert "貂蝉" in r.calls[0][2][0].text
@@ -341,6 +393,126 @@ def test_qc_review_survives_failed_merge(monkeypatch: pytest.MonkeyPatch, temp_d
     (ui,) = out["ui"]["ga_qc"]
     assert ui["common"] == [] and "没能归并出共性问题" in ui["note"] and "没能归并出共性问题" in out["result"][3]
     assert len(ui["results"]) == 2
+
+
+def test_qc_review_lazy_inputs() -> None:
+    """正常质检要向上游要图；「修这张」时不要，这样上游的扩写和出图不会执行、不花钱。"""
+    spec = nodes.GAQCReview.INPUT_TYPES()
+    assert spec["required"]["image"][1]["lazy"] and spec["optional"]["mask"][1]["lazy"]
+    assert spec["optional"]["meta"][1]["lazy"] and "lazy" not in spec["optional"]["style"][1]
+    # 参考图节点不花钱，不用按需读取；新加的开关排在最后，旧工作流里存的参数位置不会错开
+    assert "lazy" not in spec["optional"]["refs"][1]
+    assert list(spec["optional"])[-4:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model"]
+    assert spec["optional"]["fix_quality"][1]["default"] == "high"
+    assert spec["optional"]["fix_fidelity"][1]["default"] == "high"
+    node = nodes.GAQCReview()
+    assert node.check_lazy_status(fix="", image=None, mask=None, meta=None) == ["image", "mask", "meta"]
+    assert node.check_lazy_status(fix=" ", image=None) == ["image"]  # 没连线的输入不在参数里，不能去要
+    assert node.check_lazy_status(fix="", image=torch.zeros(1, 2, 2, 3), meta=None) == ["meta"]
+    assert node.check_lazy_status(fix='{"file":"a","notes":["x"]}', image=None, mask=None, meta=None) == []
+
+
+def test_qc_review_fix_edits_stored_image(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    r = SeqRouter('{"score":6,"issues":["步摇糊"]}', '{"prompt":"保持貂蝉原样，把步摇画清楚。"}',
+                  '{"score":8,"issues":[]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    mask = torch.zeros(1, 8, 8)
+    mask[:, 0, 0] = 1  # 带透明底
+    first = nodes.GAQCReview().run(image=torch.rand(1, 8, 8, 3), mask=mask,
+                                   meta={"brief": "貂蝉", "tag": "b/1", "prompt": "原提示词", "cost": 0.08})
+    full = first["ui"]["ga_qc"][0]["results"][0]["full"]
+    r.calls.clear()
+    fix = json.dumps({"file": full, "notes": ["步摇糊", " ", "飘带短一些"]})
+    style = StyleCard(name="s", description="d", positive="日系Q版卡通", negative="写实")
+    anchors = [Image.new("RGBA", (4, 4)), Image.new("RGBA", (5, 5))]
+    # 修图时上游的 image / mask / meta 都没有送进来
+    out = nodes.GAQCReview().run(fix=fix, style=style, refs=anchors, profile="vision")
+    image, out_mask, meta, report = out["result"]
+    assert image.shape == (1, 8, 8, 3) and out_mask.shape == (1, 8, 8)
+    # 先让看图模型对着原图写指令，再改图，再质检；记账标签沿用原图的
+    assert [(c[0], c[1]) for c in r.calls] == [("chat", "vision"), ("edit", "image_edit"), ("chat", "vision")]
+    assert all(c[3] == "b/1" for c in r.calls)
+    plan_call = r.calls[0][2]
+    assert "1. 步摇糊" in plan_call[0].text and "2. 飘带短一些" in plan_call[0].text and "貂蝉" in plan_call[0].text
+    assert "日系Q版卡通" in plan_call[0].text and len(plan_call[1].images) == 1  # 指令是看着这张图写的
+    req = r.calls[1][2]
+    # 指令 = 模型写的 + 几张图各自的角色 + 风格卡的硬性要求；风格卡的 negative 也带上
+    assert req.prompt.startswith("保持貂蝉原样，把步摇画清楚。第一张图是要修改的原图")
+    assert req.prompt.endswith("日系Q版卡通") and req.negative == "写实"
+    assert req.n == 1 and req.size == "8x8" and req.transparent is True
+    # 要修的原图排第一，标准风格图跟在后面
+    assert [im.size for im in req.refs] == [(8, 8), (4, 4), (5, 5)]
+    assert meta["brief"] == "貂蝉" and meta["prompt"] == req.prompt
+    # 画质和保真度在节点上选，默认都是 high，随请求发给模型并记进记录
+    assert req.params == {"quality": "high", "input_fidelity": "high"}
+    assert meta["fix"] == {"notes": ["步摇糊", "飘带短一些"], "style_refs": 2,
+                           "quality": "high", "input_fidelity": "high"}
+    assert meta["cost"] == 0.5 and meta["refs"] == 3 and meta["qc"][0]["score"] == 8
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["mode"] == "fix" and ui["base"] == full and ui["common"] == [] and len(ui["results"]) == 1
+    assert ui["results"][0]["full"] != full and "8.0/10" in report
+    assert first["ui"]["ga_qc"][0]["mode"] == "review" and first["ui"]["ga_qc"][0]["base"] == ""
+    # 关掉画风对照：只发要修的那一张，指令里也不提别的图
+    r.calls.clear()
+    r.texts = ['{"prompt":"改一下。"}', '{"score":8,"issues":[]}']
+    out = nodes.GAQCReview().run(fix=fix, refs=anchors, fix_with_refs=False, fix_quality="跟随配置",
+                                 fix_fidelity="跟随配置")
+    req = r.calls[1][2]
+    assert len(req.refs) == 1 and req.prompt == "改一下。" and out["result"][2]["fix"]["style_refs"] == 0
+    assert req.params == {}  # 跟随配置：不发这两个参数，用配置文件里给模型写的
+    assert r.calls[1][1] == "image_edit" and out["ui"]["ga_qc"][0]["model"] == "fake:img"
+    # 手动指定模型：填了就用它（可以是下拉里没有的），界面上显示实际用的是哪个
+    r.calls.clear()
+    r.texts = ['{"prompt":"改一下。"}', '{"score":8,"issues":[]}']
+    out = nodes.GAQCReview().run(fix=fix, edit_profile="image_edit", edit_model=" aihubmix:gpt-image-2 ")
+    assert r.calls[1][1] == "aihubmix:gpt-image-2"
+    with pytest.raises(RuntimeError, match="要写成 服务商:模型名，例如 aihubmix:gpt-image-2"):
+        nodes.GAQCReview().run(fix=fix, edit_model="gpt-image-2")
+
+
+def test_qc_review_fix_retries_without_fidelity(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    """模型不认保真度参数时，去掉它再试一次，并在记录里注明；别的错误照常报出来。"""
+    class Picky(SeqRouter):
+        def edit(self, profile: str, req: ImageRequest, *, tag: str) -> tuple[ImageResult, Target]:
+            if "input_fidelity" in req.params:
+                self.calls.append(("edit_rejected", profile, req, tag))
+                raise UpstreamError("upstream_error", "Unknown parameter: input_fidelity")
+            return super().edit(profile, req, tag=tag)
+
+    r = Picky('{"score":6,"issues":["步摇糊"]}', '{"prompt":"改一下。"}', '{"score":8,"issues":[]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    first = nodes.GAQCReview().run(image=torch.rand(1, 8, 8, 3), brief="貂蝉")
+    fix = json.dumps({"file": first["ui"]["ga_qc"][0]["results"][0]["full"], "notes": ["步摇糊"]})
+    r.calls.clear()
+    out = nodes.GAQCReview().run(fix=fix, fix_quality="medium")
+    assert [c[0] for c in r.calls] == ["chat", "edit_rejected", "edit", "chat"]
+    assert r.calls[2][2].params == {"quality": "medium"}
+    recorded = out["result"][2]["fix"]
+    assert recorded["input_fidelity"] == "模型不支持，已去掉" and recorded["quality"] == "medium"
+
+    class Broken(SeqRouter):
+        def edit(self, profile: str, req: ImageRequest, *, tag: str) -> tuple[ImageResult, Target]:
+            raise UpstreamError("upstream_error", "服务不可用")
+
+    b = Broken('{"prompt":"改一下。"}')
+    monkeypatch.setattr(common, "get_router", lambda: b)
+    with pytest.raises(RuntimeError, match="服务不可用"):
+        nodes.GAQCReview().run(fix=fix)
+
+
+def test_qc_review_fix_errors(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    monkeypatch.setattr(common, "get_router", FakeRouter)
+    run = nodes.GAQCReview().run
+    with pytest.raises(RuntimeError, match="平时应该留空"):
+        run(fix="不是 JSON")
+    with pytest.raises(RuntimeError, match="平时应该留空"):
+        run(fix='{"file": 1, "notes": []}')
+    with pytest.raises(RuntimeError, match="名字不对"):
+        run(fix='{"file": "../../etc/passwd", "notes": ["x"]}')
+    with pytest.raises(RuntimeError, match="找不到要修改的那张原图"):
+        run(fix='{"file": "0123456789ab.png", "notes": ["x"]}')
+    with pytest.raises(RuntimeError, match="没有收到图片"):
+        run()
 
 
 def test_qc_review_needs_brief(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:

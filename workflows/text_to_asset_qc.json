@@ -87,7 +87,17 @@
         0
       ],
       "brief": "",
-      "tag": ""
+      "edit_profile": "image_edit",
+      "fix": "",
+      "tag": "",
+      "refs": [
+        "ref",
+        0
+      ],
+      "fix_with_refs": true,
+      "fix_quality": "high",
+      "fix_fidelity": "high",
+      "edit_model": ""
     },
     "_meta": {
       "title": "质检结果"

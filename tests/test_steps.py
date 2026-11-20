@@ -7,7 +7,14 @@ from PIL import Image
 from game_art.config import Target
 from game_art.errors import InputError, UpstreamError
 from game_art.providers.base import ChatResult, Message
-from game_art.steps import analyze_reference, common_issues, expand_prompt, feedback_lines, qc_score
+from game_art.steps import (
+    analyze_reference,
+    common_issues,
+    expand_prompt,
+    feedback_lines,
+    fix_instruction,
+    qc_score,
+)
 from game_art.style import StyleCard, load_style_card
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -258,3 +265,42 @@ def test_common_issues_rejects_garbage(bad: str) -> None:
     with pytest.raises(UpstreamError) as e:
         common_issues(FakeRouter(bad), [["a"], ["b"]], tag="t")
     assert e.value.code == "bad_llm_json"
+
+
+def test_fix_instruction() -> None:
+    router = FakeRouter('{"prompt":" 保持关羽原样，把刀头加宽。 "}')
+    img = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    got = fix_instruction(router, img, ["刀头太小", " ", "步摇糊"], brief="关羽", tag="t",
+                          style=_style(positive="国潮", negative="写实"))
+    # 模型写的指令后面原样拼上风格卡的硬性要求，画风不会因为修改而跑偏
+    assert got.prompt == "保持关羽原样，把刀头加宽。, 国潮" and got.negative == "写实"
+    system, user = router.calls[0]["messages"]
+    assert "1. 刀头太小" in system.text and "2. 步摇糊" in system.text and "关羽" in system.text
+    assert "国潮" in system.text and router.calls[0]["profile"] == "vision"
+    assert len(user.images) == 1 and user.images[0].mode == "RGB"  # 看着要修的这张图写
+    # 附带画风对照图时，说明每张图各自的角色
+    got = fix_instruction(router, img, ["a"], brief="关羽", style=None, tag="t", style_refs=2)
+    assert got.prompt.startswith("保持关羽原样，把刀头加宽。第一张图是要修改的原图。其余几张图只用来对照画风")
+    assert got.prompt.endswith("都不要搬过来。") and got.negative == ""
+    with pytest.raises(InputError, match="没有修改意见"):
+        fix_instruction(router, img, [" "], brief="关羽", style=None, tag="t")
+    for bad in ("x", "{}", '{"prompt":""}', '{"prompt":1}'):
+        with pytest.raises(UpstreamError):
+            fix_instruction(FakeRouter(bad), img, ["a"], brief="关羽", style=None, tag="t")
+
+
+def test_qc_issue_kinds() -> None:
+    """问题分构图类和细节类：构图类要整张重画，细节类可以在原图上修。没写或乱写的按细节类处理。"""
+    text = ('{"score":5,"issues":[{"text":"头顶贴边","kind":"layout"},{"text":"步摇糊","kind":"detail"},'
+            '{"text":"没写类别"},{"text":"乱写","kind":"x"},"老格式"]}')
+    r = qc_score(FakeRouter(text), Image.new("RGB", (4, 4)), brief="龙", style=None, tag="t")
+    assert [d.kind for d in r.details] == ["layout", "detail", "detail", "detail", "detail"]
+    system = FakeRouter(text)
+    qc_score(system, Image.new("RGB", (4, 4)), brief="龙", style=None, tag="t")
+    assert "风格卡规定的画风特征不是问题" in system.calls[0]["messages"][0].text
+
+
+def test_qc_prompt_forbids_flagging_transparency() -> None:
+    router = FakeRouter('{"score":8,"issues":[]}')
+    qc_score(router, Image.new("RGBA", (8, 8), (0, 0, 0, 0)), brief="龙", style=None, tag="t")
+    assert "透明底正是想要的结果" in router.calls[0]["messages"][0].text

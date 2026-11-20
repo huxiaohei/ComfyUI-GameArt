@@ -34,6 +34,8 @@ class QCIssue(BaseModel):
     """一条质检问题。level：must = 不改不能用；suggest = 改了更好的建议。"""
     text: str
     level: Literal["must", "suggest"] = "must"
+    # layout = 构图类，要整张重画（留白、贴边、比例、姿势）；detail = 细节类，可以在原图上局部修改
+    kind: Literal["layout", "detail"] = "detail"
 
 
 class QCResult(BaseModel):
@@ -167,14 +169,15 @@ def _parse_issues(raw: Any) -> list[QCIssue]:
     out: list[QCIssue] = []
     for item in raw:
         if isinstance(item, str):
-            text, level = item, "must"
+            text, level, kind = item, "must", "detail"
         elif isinstance(item, dict) and isinstance(item.get("text"), str):
-            text, level = item["text"], item.get("level", "must")
+            text, level, kind = item["text"], item.get("level", "must"), item.get("kind", "detail")
         else:
             raise ValueError("issues 里有一项既不是字符串也不是带 text 的对象")
         text = text.strip()
         if text:
-            out.append(QCIssue(text=text, level="suggest" if level == "suggest" else "must"))
+            out.append(QCIssue(text=text, level="suggest" if level == "suggest" else "must",
+                               kind="layout" if kind == "layout" else "detail"))
     return out
 
 
@@ -231,3 +234,41 @@ def common_issues(router: ChatRouter, per_image: list[list[str]], *, tag: str,
         raise UpstreamError("bad_llm_json",
                             f"归并共性问题时返回的不是合法 JSON: {e}; 原始输出: {res.text[:200]!r}") from e
     return sorted(out, key=lambda c: -c.count)
+
+
+# 修图时接在指令后面，说明几张图各自的角色（第一张是要改的原图，其余只管画风）
+FIX_STYLE_REFS_NOTE = ("第一张图是要修改的原图。其余几张图只用来对照画风、线条和上色方式，"
+                       "它们里面的人物、服装和道具都不要搬过来。")
+
+
+def fix_instruction(router: ChatRouter, img: Image.Image, notes: list[str], *, brief: str,
+                    style: StyleCard | None, tag: str, style_refs: int = 0,
+                    profile: str = "vision") -> ExpandedPrompt:
+    """看着要修改的这张图，把修改意见（质检问题 + 使用者补充）写成交给图片编辑模型的完整指令。
+
+    指令里既有"保持什么"（对当前画面的如实描述）也有"改什么"，末尾原样拼上风格卡的 positive，
+    这样画风不会因为修改而跑偏。style_refs > 0 表示改图时还会附带几张只管画风的参考图。
+    """
+    notes = [n.strip() for n in notes if n.strip()]
+    if not notes:
+        raise InputError("no_fix_notes", "没有修改意见：请至少勾选一条问题，或在「我的补充」里写上要改什么")
+    listing = "".join(f"\n{i}. {n}" for i, n in enumerate(notes, 1))
+    system = _template("fix.md").safe_substitute(brief=brief or "（无）", style=_style_text(style), notes=listing)
+    messages = [Message(role="system", text=system),
+                Message(role="user", text="这是要修改的图，请写出修改指令。", images=[flatten_for_review(img)])]
+    res, _target = router.chat(profile, messages, tag=tag, json_mode=True)
+    try:
+        prompt = _parse_json(res.text)["prompt"]
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt 为空或不是字符串")
+    except (ValueError, KeyError, TypeError) as e:
+        raise UpstreamError("bad_llm_json",
+                            f"生成修改指令时返回的不是合法 JSON: {e}; 原始输出: {res.text[:200]!r}") from e
+    prompt = prompt.strip()
+    if style_refs > 0:
+        prompt = f"{prompt}{FIX_STYLE_REFS_NOTE}"
+    negative = ""
+    if style:
+        prompt = _merge(prompt, style.positive)
+        negative = style.negative.strip()
+    return ExpandedPrompt(prompt=prompt, negative=negative)
