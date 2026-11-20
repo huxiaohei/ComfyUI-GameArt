@@ -357,6 +357,7 @@ def test_qc_review_single_image(monkeypatch: pytest.MonkeyPatch, temp_dir: pathl
     assert thumb["type"] == "temp" and (temp_dir / thumb["subfolder"] / thumb["filename"]).is_file()
     # 原图和它的记录也存了一份，之后「修这张」拿它当底图
     stored = temp_dir / thumb["subfolder"] / res["full"]
+    assert res["path"] == str(stored)  # 完整路径也给界面，下游没有保存节点时「另存这张」用它
     with Image.open(stored) as kept:
         assert kept.size == (6, 8)
     assert json.loads(stored.with_suffix(".json").read_text())["prompt"] == "p"

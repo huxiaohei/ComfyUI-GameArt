@@ -124,6 +124,34 @@ function saveSelected(node, event) {
   });
 }
 
+// 顺着连线往上游找「质检结果」节点
+function findReview(node) {
+  const seen = new Set();
+  const queue = [node];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || seen.has(cur.id)) continue;
+    seen.add(cur.id);
+    if (cur.comfyClass === "GAQCReview") return cur;
+    for (let i = 0; i < (cur.inputs?.length ?? 0); i++) queue.push(cur.getInputNode?.(i));
+  }
+  return null;
+}
+
+// 保存完以后，把"哪张图存成了哪个文件"记到上游「质检结果」节点对应的那几条上（按顺序对号入座）。
+// 这样在质检结果里点任意一张历史图片，都能找回它的文件：让本节点的预览切过去，或者直接另存。
+// 逻辑要和 qc_review.js 的 attachSaved 保持一致。
+function recordOnReview(node, message) {
+  const state = findReview(node)?.properties?.ga_qc;
+  const batch = state?.lastBatch ?? [];
+  const files = message.ga_files;
+  if (!batch.length || batch.length !== files.length) return;
+  batch.forEach((index, k) => {
+    const r = state.results?.[index];
+    if (r) r.saved = { image: message.images?.[k] ?? null, file: String(files[k]) };
+  });
+}
+
 const hasDirectory = (e) =>
   [...(e?.dataTransfer?.items ?? [])].some((item) => item.kind === "file" && item.webkitGetAsEntry?.()?.isDirectory);
 
@@ -149,6 +177,7 @@ app.registerExtension({
       if (!Array.isArray(message?.ga_files)) return;
       node.properties = node.properties ?? {};
       node.properties.ga_files = message.ga_files;
+      recordOnReview(node, message);
     };
     const button = node.addWidget("button", "另存选中的图…", null, (_value, _canvas, _node, _pos, event) =>
       saveSelected(node, event));

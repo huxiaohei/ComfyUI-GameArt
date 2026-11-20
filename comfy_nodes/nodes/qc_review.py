@@ -74,7 +74,8 @@ def _store(pils: list[Image.Image], meta: dict[str, Any]) -> list[dict[str, Any]
         thumb = im.copy()
         thumb.thumbnail((THUMB_SIZE, THUMB_SIZE))
         thumb.save(folder / f"{key}_t.png", format="PNG")
-        out.append({"full": f"{key}.png",
+        # path：这张图（质检时的原样，还没经过去背景和清理）在硬盘上的位置；下游没有保存节点时「另存这张」用它
+        out.append({"full": f"{key}.png", "path": str(folder / f"{key}.png"),
                     "thumb": {"filename": f"{key}_t.png", "subfolder": STORE_SUBFOLDER, "type": "temp"}})
     return out
 

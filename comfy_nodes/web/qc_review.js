@@ -7,10 +7,13 @@
 //   而是拿上次存下的原图去改，改完的图作为新的一张追加在缩略图后面。排队之后马上把 fix 清空，
 //   所以之后正常点运行还是整条流程重跑。
 // - 「清空修订意见」：把上游 feedback 清空（换素材、或想从头再来时用）。
+// - 和「保存资产」联动：每张图存到了哪个文件，由 save_asset.js 在保存后记到这里对应的那一条上（saved）。
+//   点缩略图时，下游「保存资产」节点的预览跟着切到这张图；「另存这张…」把它复制到选定的文件夹。
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const NODE_CLASS = "GAQCReview";
+const SAVE_CLASS = "GASaveAsset";
 const EXPAND_CLASS = "GAPromptExpand";
 const STYLE_ID = "ga-qc-review-style";
 const CSS = `
@@ -70,6 +73,8 @@ export function buildState(payload) {
     passed: !!r.passed,
     thumb: r.thumb ?? null,
     full: r.full ?? "", // 原图在后台临时目录里的名字，「修这张」拿它当底图
+    path: r.path ?? "", // 同一张图的完整路径（质检时的原样）；没有保存记录时「另存这张」用它
+    saved: null, // 「保存资产」把这张图存成了哪个文件：{ image: 预览用的描述, file: 完整路径 }，保存后才有
     issues: (r.issues ?? []).map((i) => ({
       text: String(i.text ?? ""),
       level: i.level === "suggest" ? "suggest" : "must",
@@ -87,13 +92,17 @@ export function buildState(payload) {
   results.forEach((r, i) => {
     if (r.score > results[current].score) current = i;
   });
-  return { results, common, current, note: "", threshold: Number(payload?.threshold) || 0, info: payload?.note ?? "" };
+  return {
+    results, common, current, note: "", threshold: Number(payload?.threshold) || 0, info: payload?.note ?? "",
+    lastBatch: results.map((_, i) => i), // 最近一次运行产出的是哪几张；紧接着「保存资产」按这个顺序对号入座
+  };
 }
 
 // 「修这张」的结果：不替换原来的列表，把新图追加在后面并切过去，记下它是从哪一张改来的。
 export function appendFix(state, payload) {
   const added = buildState(payload).results;
   const parent = state.results.findIndex((r) => r.full && r.full === payload?.base);
+  state.lastBatch = added.map((_, i) => state.results.length + i);
   for (const r of added) {
     for (const i of r.issues) i.on = i.level === "must";
     r.from = parent >= 0 ? parent + 1 : 0;
@@ -149,6 +158,88 @@ export function mergeFeedback(existing, lines) {
     if (t && !out.includes(t)) out.push(t);
   }
   return out.join("\n");
+}
+
+// 「保存资产」保存完以后调用：把这次存下的文件按顺序记到最近一次运行产出的那几张图上。
+// images 是预览用的描述（{filename, subfolder, type}），files 是完整路径，两者一一对应。
+export function attachSaved(state, images, files) {
+  const batch = state?.lastBatch ?? [];
+  if (!batch.length || batch.length !== (files?.length ?? 0)) return false; // 张数对不上（中间有别的节点增减了图）：不猜
+  batch.forEach((index, k) => {
+    const r = state.results[index];
+    if (r) r.saved = { image: images?.[k] ?? null, file: String(files[k]) };
+  });
+  return true;
+}
+
+// ---------------------------------------------------------------- 找下游的「保存资产」
+function findSave(node) {
+  const seen = new Set();
+  const queue = [node];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || seen.has(cur.id)) continue;
+    seen.add(cur.id);
+    if (cur.comfyClass === SAVE_CLASS) return cur;
+    for (let i = 0; i < (cur.outputs?.length ?? 0); i++) for (const next of cur.getOutputNodes?.(i) ?? []) queue.push(next);
+  }
+  return null;
+}
+
+// 让下游「保存资产」节点的预览显示这张图，它的「另存选中的图」也跟着指向这张。
+// 预览是编辑器按"节点的输出记录"画的，所以这里换掉那条记录再请它重画。
+function showInSave(node, result) {
+  const save = findSave(node);
+  if (!save || !result?.saved?.image) return false;
+  const output = { images: [result.saved.image], ga_files: [result.saved.file] };
+  save.properties = save.properties ?? {};
+  save.properties.ga_files = output.ga_files;
+  try {
+    const outputs = app.nodeOutputs;
+    if (outputs) outputs[String(save.id)] = output;
+  } catch (err) {
+    console.warn("[game_art] 切换保存节点的预览失败", err);
+  }
+  save.imageIndex = null;
+  save.setDirtyCanvas?.(true, true);
+  app.graph?.setDirtyCanvas?.(true, true);
+  return true;
+}
+
+async function saveResultAs(node, result) {
+  const save = findSave(node);
+  const name = String(widget(save ?? {}, "name")?.value ?? "").trim() || "asset";
+  const path = result?.saved?.file || result?.path;
+  if (!path) {
+    toast("warn", "这张图是旧版本留下的结果，后台没有存原图。请先正常运行一次，再另存。");
+    return;
+  }
+  let res;
+  try {
+    res = await api.fetchApi("/game_art/save_as", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, name }),
+    });
+  } catch (err) {
+    toast("error", `另存失败：${err?.message ?? err}`);
+    return;
+  }
+  if (res.status === 404 || res.status === 405) {
+    toast("error", "后台还没有「另存」这个功能，请重启 ComfyUI 后再试。");
+    return;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    toast("error", `另存失败：后台返回的内容看不懂（状态 ${res.status}）。`);
+    return;
+  }
+  if (!res.ok) toast("error", data.error ?? `另存失败（${res.status}）`);
+  else if (data.saved) {
+    toast("success", result.saved?.file
+      ? `已另存为 ${data.saved}`
+      : `已另存为 ${data.saved}（这张图没有经过「保存资产」，存的是质检时的原样，没有去背景和清理）`);
+  }
 }
 
 // ---------------------------------------------------------------- 找上游的「提示词扩写」
@@ -232,6 +323,7 @@ function render(node, root) {
         onclick: () => {
           state.current = i;
           render(node, root);
+          showInSave(node, r); // 下游「保存资产」的预览跟着切到这张
         },
       }, [img, el("div", { class: `s ${r.passed ? "ok" : "bad"}`, text: `${i + 1}${r.from ? "✎" : ""} · ${r.score.toFixed(1)}` })]));
     });
@@ -320,7 +412,20 @@ function render(node, root) {
     const expand = feedbackTarget(node);
     if (expand && setWidget(expand, "feedback", "")) toast("info", "已清空「提示词扩写」里的修订意见。");
   } });
-  root.append(el("div", { class: "ga-qc-actions" }, [fixThis, regenerate, clear, counter]));
+  let saving = false;
+  const saveAs = el("button", {
+    text: many ? `另存第 ${state.current + 1} 张…` : "另存这张…",
+    title: "定稿用：选一个文件夹，把这张图和它的记录复制过去，文件名用「保存资产」节点的 name。",
+    onclick: () => {
+      if (saving) {
+        toast("warn", "选择文件夹的窗口已经打开了，可能被别的窗口挡住，请切过去看看。");
+        return;
+      }
+      saving = true;
+      saveResultAs(node, cur).finally(() => (saving = false));
+    },
+  });
+  root.append(el("div", { class: "ga-qc-actions" }, [fixThis, regenerate, saveAs, clear, counter]));
   refresh();
 }
 
