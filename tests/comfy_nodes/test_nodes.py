@@ -521,6 +521,43 @@ def test_qc_review_needs_brief(monkeypatch: pytest.MonkeyPatch, temp_dir: pathli
         nodes.GAQCReview().run(image=torch.rand(1, 8, 8, 3), meta={"prompt": "p"})
 
 
+def test_save_asset_reports_files_and_copy(out_dir: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """保存后告诉界面每张图的完整路径；「另存选中的图」据此把图和记录复制到选定的文件夹。"""
+    from comfy_nodes.nodes.save_asset import copy_asset
+    res = nodes.GASaveAsset().save(image=torch.ones(2, 4, 4, 3), subfolder="q", name="guanyu", meta={"prompt": "p"})
+    files = res["ui"]["ga_files"]
+    assert files == [str(out_dir / "q" / "guanyu_00001.png"), str(out_dir / "q" / "guanyu_00002.png")]
+    assert len(res["ui"]["images"]) == 2
+    dest = tmp_path / "project" / "imgs"  # 不存在：自动创建
+    first = copy_asset(files[1], str(dest), "guanyu")
+    assert first == dest / "guanyu.png" and first.read_bytes() == Path(files[1]).read_bytes()
+    record = json.loads((dest / "guanyu.json").read_text())
+    assert record["prompt"] == "p" and record["file"] == "guanyu.png" and record["copied_from"] == files[1]
+    # 已有同名文件：不覆盖，自动加序号；名字里带 .png 也认
+    again = copy_asset(files[0], str(dest), "guanyu.png")
+    assert again == dest / "guanyu_2.png" and (dest / "guanyu_2.json").is_file()
+    assert first.read_bytes() == Path(files[1]).read_bytes()
+    assert copy_asset(files[0], str(dest), "guanyu").name == "guanyu_3.png"
+    # 只认本节点存出来的图：要是 .png 且旁边有记录文件
+    lone = tmp_path / "lone.png"
+    lone.write_bytes(b"x")
+    for bad in (str(lone), str(out_dir / "q" / "guanyu_00001.json"), str(tmp_path / "missing.png")):
+        with pytest.raises(InputError, match="找不到要另存的图片"):
+            copy_asset(bad, str(dest), "x")
+    with pytest.raises(InputError, match="名称不合法"):
+        copy_asset(files[0], str(dest), "../x")
+
+
+def test_choose_folder_starts_at_last_location(tmp_path: pathlib.Path) -> None:
+    from comfy_nodes import routes
+    mac = routes.choose_folder_command("另存", platform="darwin", start=str(tmp_path))
+    assert f'default location POSIX file "{tmp_path}"' in mac[-1]
+    # 记着的文件夹已经不存在了：当作没有，用系统默认位置
+    assert "default location" not in routes.choose_folder_command("另存", platform="darwin", start="/no/such")[-1]
+    assert routes.choose_folder_command("另存", platform="linux", start=str(tmp_path))[-1] == str(tmp_path)
+    assert routes.choose_folder_command("另存", platform="linux")[-1] == ""
+
+
 def test_save_asset_splits_qc_per_image(out_dir: pathlib.Path) -> None:
     """「质检结果」给的是整批的质检列表，每张图旁边的记录里只留它自己那一条。"""
     meta = {"prompt": "p", "qc": [{"score": 8}, {"score": 5}]}
@@ -650,7 +687,7 @@ def test_choose_folder_helpers() -> None:
     mac = routes.choose_folder_command('选 "这个"', platform="darwin")
     assert mac[0] == "osascript" and mac[-1] == 'POSIX path of (choose folder with prompt "选 \\"这个\\"")'
     other = routes.choose_folder_command("选", platform="linux")
-    assert other[0] == sys.executable and other[-1] == "选" and "askdirectory" in other[2]
+    assert other[0] == sys.executable and other[-2:] == ["选", ""] and "askdirectory" in other[2]
     assert routes.parse_chosen_folder(0, "/Users/me/art/\n") == "/Users/me/art"
     assert routes.parse_chosen_folder(0, "/\n") == "/"
     assert routes.parse_chosen_folder(1, "") == "" and routes.parse_chosen_folder(0, "  \n") == ""
@@ -669,16 +706,17 @@ def test_choose_folder_runs_command(monkeypatch: pytest.MonkeyPatch) -> None:
     from comfy_nodes import routes
     # 用一条必定可用的命令代替系统选择窗口
     monkeypatch.setattr(routes, "choose_folder_command",
-                        lambda prompt: [sys.executable, "-c", "print('/picked/dir/')"])
+                        lambda prompt, start="": [sys.executable, "-c", "print('/picked/dir/')"])
     assert asyncio.run(routes.choose_folder()) == "/picked/dir"
     cancel = "import sys; sys.stderr.write('User canceled. (-128)'); sys.exit(1)"  # osascript 点取消时的表现
-    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt: [sys.executable, "-c", cancel])
+    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt, start="": [sys.executable, "-c", cancel])
     assert asyncio.run(routes.choose_folder()) == ""
     monkeypatch.setattr(routes, "choose_folder_command",
-                        lambda prompt: [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"])
+                        lambda prompt, start="": [sys.executable, "-c",
+                                                  "import sys; sys.stderr.write('boom'); sys.exit(2)"])
     with pytest.raises(Exception, match="boom"):
         asyncio.run(routes.choose_folder())
-    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt: ["/no/such/program-xyz"])
+    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt, start="": ["/no/such/program-xyz"])
     with pytest.raises(Exception, match="无法弹出"):
         asyncio.run(routes.choose_folder())
 

@@ -1,7 +1,8 @@
 """编辑器用的小接口，只在 ComfyUI 进程里注册：
 - 让「风格卡」节点能把文件内容读进编辑框；
 - 让「提示词扩写」节点能读描述清单（yaml），列出里面的每一项供选择；
-- 弹出系统自带的"选择文件夹"窗口（网页拿不到硬盘上的完整路径，只能让本机的 ComfyUI 进程代劳）。
+- 弹出系统自带的"选择文件夹"窗口（网页拿不到硬盘上的完整路径，只能让本机的 ComfyUI 进程代劳）；
+- 把「保存资产」节点上选中的一张图另存到选定的文件夹。
 """
 from __future__ import annotations
 
@@ -16,13 +17,18 @@ from game_art.errors import GAError, InputError
 from game_art.paths import resolve_repo_path
 from game_art.style import load_style_card
 
+from .nodes.save_asset import copy_asset
+
 ROUTE = "/game_art/style_card"
 CHOOSE_FOLDER_ROUTE = "/game_art/choose_folder"
+SAVE_AS_ROUTE = "/game_art/save_as"
 BRIEFS_ROUTE = "/game_art/briefs"
+_LAST_SAVE_AS: dict[str, str] = {}  # 上次「另存」选的文件夹，下次弹窗从这里开始（只在这次 ComfyUI 运行期间记着）
 _TK_SCRIPT = (
     "import tkinter, tkinter.filedialog as f\n"
     "r = tkinter.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
-    "print(f.askdirectory(title=__import__('sys').argv[1]) or '')\n")
+    "a = __import__('sys').argv\n"
+    "print(f.askdirectory(title=a[1], initialdir=(a[2] if len(a) > 2 and a[2] else None)) or '')\n")
 
 
 def style_card_text(path: str) -> str:
@@ -50,13 +56,20 @@ def briefs_items(path: str = "", text: str = "") -> dict[str, Any]:
                       for i in briefs.items]}
 
 
-def choose_folder_command(prompt: str, platform: str = sys.platform) -> list[str]:
+def _quoted(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def choose_folder_command(prompt: str, platform: str = sys.platform, start: str = "") -> list[str]:
     """弹出"选择文件夹"窗口的命令；选中的路径打印到标准输出，取消时输出为空或退出码非 0。
-    macOS 用系统自带的 osascript；其他系统用当前 Python 的 tkinter。"""
+    macOS 用系统自带的 osascript；其他系统用当前 Python 的 tkinter。
+    start：窗口一打开就停在哪个文件夹（比如上次另存的位置）；不存在或没给就用系统默认的。"""
+    start = start if start and Path(start).is_dir() else ""
     if platform == "darwin":
-        safe = prompt.replace("\\", "\\\\").replace('"', '\\"')
-        return ["osascript", "-e", "activate", "-e", f'POSIX path of (choose folder with prompt "{safe}")']
-    return [sys.executable, "-c", _TK_SCRIPT, prompt]
+        where = f' default location POSIX file "{_quoted(start)}"' if start else ""
+        return ["osascript", "-e", "activate", "-e",
+                f'POSIX path of (choose folder with prompt "{_quoted(prompt)}"{where})']
+    return [sys.executable, "-c", _TK_SCRIPT, prompt, start]
 
 
 def parse_chosen_folder(returncode: int, stdout: str) -> str:
@@ -78,11 +91,12 @@ def as_save_location(chosen: str, output_dir: str | None) -> str:
     return target.relative_to(root).as_posix() if root in target.parents else chosen
 
 
-async def choose_folder(prompt: str = "选择保存文件夹") -> str:
+async def choose_folder(prompt: str = "选择保存文件夹", start: str = "") -> str:
     """在运行 ComfyUI 的这台机器上弹出选择窗口，等用户选完。"""
     try:
         proc = await asyncio.create_subprocess_exec(
-            *choose_folder_command(prompt), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            *choose_folder_command(prompt, start=start),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     except OSError as e:
         raise InputError("choose_folder_unavailable", f"无法弹出选择文件夹的窗口：{e}") from e
     stdout, stderr = await proc.communicate()
@@ -131,6 +145,25 @@ def register() -> bool:
         except ValueError:
             return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
 
+    async def save_as_handler(request: Any) -> Any:
+        """「另存选中的图」：弹窗选文件夹，把这张图和它的记录复制过去。窗口默认停在上次另存的位置。"""
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise InputError("bad_asset", "请求内容格式不对")
+            src, name = str(body.get("path") or ""), str(body.get("name") or "")
+            folder = await choose_folder(f"把 {name or '这张图'} 另存到哪个文件夹", start=_LAST_SAVE_AS.get("dir", ""))
+            if not folder:
+                return web.json_response({"cancelled": True})
+            dest = copy_asset(src, folder, name)
+            _LAST_SAVE_AS["dir"] = folder
+            return web.json_response({"saved": str(dest)})
+        except GAError as e:
+            return web.json_response({"error": e.message}, status=400)
+        except ValueError:
+            return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
+
+    instance.routes.post(SAVE_AS_ROUTE)(save_as_handler)
     instance.routes.get(ROUTE)(handler)
     instance.routes.post(BRIEFS_ROUTE)(briefs_handler)
     instance.routes.post(CHOOSE_FOLDER_ROUTE)(choose_folder_handler)

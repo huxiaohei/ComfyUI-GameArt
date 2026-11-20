@@ -69,6 +69,41 @@ def _safe_name(name: str) -> str:
     return name
 
 
+def copy_asset(src: str, dest_dir: str, name: str) -> Path:
+    """把一张已保存的资产另存到 dest_dir，文件名是 <name>.png，同名的 .json 记录一起带过去。
+
+    只认本节点保存出来的图：必须是 .png，旁边要有同名 .json。目标位置已有同名文件时不覆盖，
+    改用 <name>_2.png、<name>_3.png……返回实际写入的 PNG 路径。
+    """
+    source = Path(src)
+    side = source.with_suffix(".json")
+    if source.suffix.lower() != ".png" or not source.is_file() or not side.is_file():
+        raise InputError("bad_asset", (
+            f"找不到要另存的图片或它的记录文件：{source}（图片可能已被移走或删除，请重新运行一次再另存）"))
+    name = _safe_name(name)
+    if name.lower().endswith(".png"):
+        name = name[:-4] or "asset"
+    target_dir = Path(dest_dir).expanduser()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise InputError("bad_subfolder", f"无法使用这个文件夹 {target_dir}：{e}") from e
+    stem, n = name, 1
+    while (target_dir / f"{stem}.png").exists() or (target_dir / f"{stem}.json").exists():
+        n += 1
+        stem = f"{name}_{n}"
+    dest = target_dir / f"{stem}.png"
+    try:
+        dest.write_bytes(source.read_bytes())
+        record = json.loads(side.read_text(encoding="utf-8"))
+        if isinstance(record, dict):
+            record.update(file=dest.name, copied_from=str(source))
+        dest.with_suffix(".json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, ValueError) as e:
+        raise InputError("copy_failed", f"另存失败：{e}") from e
+    return dest
+
+
 class GASaveAsset:
     CATEGORY = CATEGORY
     FUNCTION = "save"
@@ -144,6 +179,7 @@ class GASaveAsset:
         # 无 mask 时也写 RGBA（alpha 全不透明），保持产物格式一致
         pils = [clean_faint_alpha(im, clean_alpha) for im in tensors_to_pils(image, mask)]
         saved: list[dict[str, str]] = []
+        files: list[str] = []  # 每张图在硬盘上的完整路径，和 saved 一一对应，「另存选中的图」用它找原文件
         counter = 1
         # 上游「质检结果」给的是整批的质检列表：每张图的记录里只留它自己那一条
         qc_list = (meta or {}).get("qc")
@@ -154,6 +190,7 @@ class GASaveAsset:
                 counter += 1
             fname = f"{name}_{counter:05d}.png"
             im.save(target_dir / fname, format="PNG")
+            files.append(str(target_dir / fname))
             side = dict(meta or {})
             if per_image_qc is not None:
                 side["qc"] = per_image_qc[index]
@@ -170,4 +207,4 @@ class GASaveAsset:
                 im.save(preview_dir / shown, format="PNG")
                 saved.append({"filename": shown, "subfolder": sub, "type": "temp"})
             counter += 1
-        return {"ui": {"images": saved}}
+        return {"ui": {"images": saved, "ga_files": files}}
