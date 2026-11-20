@@ -71,30 +71,35 @@
 
 | 工作流 | 做什么 | 流程 |
 |---|---|---|
-| `text_to_asset` | 文案 → 资源 | 风格卡 → 提示词扩写 → 云端生图 → 去背景 → 保存 |
-| `ref_to_asset` | 参考图 + 文案 → 资源 | 参考图分析 + 风格卡 → 提示词扩写 → 云端改图 → 去背景 → 保存 |
-| `style_samples` | 先看风格再定：一次出 4 张样张 | 风格卡 → 提示词扩写 → 云端生图 → 保存 |
+| `text_to_asset` | 文案（+ 可选参考图）→ 资源 | 风格卡 → 提示词扩写 → 云端生图（参考图节点里有图时按参考图生图）→ 去背景 → 保存 |
+| `ref_to_asset` | 参考图 + 文案 → 资源 | 参考图 → 参考图分析 + 风格卡 → 提示词扩写 → 云端改图 → 去背景 → 保存 |
+| `style_samples` | 先看风格再定：一次出 4 张样张 | 风格卡 → 提示词扩写 → 云端生图（可带参考图）→ 保存 |
 | `compose_template` | 把素材图和文字按版式合成一张成品 | 载入素材 → 模板合成 → 保存 |
 
-九个节点（节点菜单里的 `GameArt` 分类）：
+十个节点（节点菜单里的 `GameArt` 分类）：
 
 | 节点 | 作用 | 调云端 |
 |---|---|---|
 | 风格卡 `GAStyleCard` | 读入画风定义（YAML 文件，或直接在节点上编辑） | 否 |
+| 参考图 `GAReferenceImages` | 载入一张或多张参考图（一行一个路径），供生图、改图、分析使用 | 否 |
 | 提示词扩写 `GAPromptExpand` | 把一两句大白话扩写成完整的正向/反向提示词 | 文字模型 |
 | 参考图分析 `GAReferenceAnalyze` | 把参考图描述成文字，供扩写使用 | 看图模型 |
-| 云端生图 `GACloudGenerate` | 按提示词出图 | 出图模型 |
+| 云端生图 `GACloudGenerate` | 按提示词出图；接了参考图时按参考图生图 | 出图模型 |
 | 云端改图 `GACloudEdit` | 以参考图为基础出图或改图 | 出图模型 |
 | 去背景 `GARemoveBackground` | 本机抠图得到透明底 | 否 |
 | 质检打分 `GAQCScore` | 给成品打分并给出理由 | 看图模型 |
 | 模板合成 `GAComposeTemplate` | 按版式文件把底框、图案、文字拼成成品 | 否 |
-| 保存资产 `GASaveAsset` | 写出 PNG 和同名 `.json` 元数据 | 否 |
+| 保存资产 `GASaveAsset` | 写出 PNG 和同名 `.json` 元数据；可选清理半透明残留 | 否 |
 
 **参数说明：** 每个参数都带中文说明，鼠标停在参数上会显示，选中节点后右侧"信息"页也有。资产类型、尺寸、去背景方式、模型都是下拉选项。
 
 **模型下拉**里有两类选项：不带冒号的（`text`、`image` 等）是配置里的"模型组"，按顺序尝试、失败自动换下一个；带冒号的（`aihubmix:gpt-4o`）是直接指定一个模型。带冒号的选项包括配置里用到的模型，以及各服务商 `/models` 接口返回的全部模型（自动获取，每小时更新）。列表不区分用途，给出图节点选了聊天模型，运行时会报错并带上服务商给出的原因。
 
-**风格卡**字段：`name`、`description`（必填），`palette`、`positive`、`negative`、`rules`、`reference_images`（可选，留空表示不设置）。可以读文件，也可以在节点的 `edit` 框里直接写；编辑框里有内容时以它为准。示例见 `examples/style_cards/guochao.yaml`。
+**风格卡**字段：`name`、`description`（必填），`palette`、`positive`、`negative`、`rules`（可选，留空表示不设置）。可以读文件，也可以在节点的 `edit` 框里直接写；编辑框里有内容时以它为准。示例见 `examples/style_cards/guochao.yaml`。
+
+**参考图**节点：`paths` 一行一个图片路径，可以写多张，留空表示不用参考图。可以写完整路径、`@repo/...`，或只写 ComfyUI `input` 目录里的文件名；空行和 `#` 开头的行会被忽略。输出的 `refs` 接到「云端生图」「云端改图」「参考图分析」。「云端生图」接了参考图且里面有图时，会改走"按参考图生图"，用它的 `edit_profile` 模型组。模型分不清"参考画风"和"参考内容"，参考图里最显眼的人物、道具、姿势容易被照搬；只想统一画风时，放几张内容不同、画风相同的图，并在描述里写明哪些地方按文字重新设计。风格卡不再支持 `reference_images` 字段，旧风格卡里有这一项时会报错并提示改用本节点。
+
+**清理半透明残留**：「保存资产」的 `clean_alpha`（0–255，默认 0 不清理）。大于 0 时，透明度低于这个值、又不紧贴主体的像素会被擦成全透明，用来去掉模型画在主体脚下的淡阴影和抠图留下的雾边，淡阴影一般用 64–128。只对带透明底的图有效；薄纱、烟雾、光晕这类本来就该半透明的素材保持 0。用了它时，数值会写进图片旁边的 `.json`。
 
 **资产类型**：`icon`、`prop`、`character`、`ui_element`、`background`、`illustration`。完整场景选 `background` 或 `illustration`，其余类型会要求主体居中、背景干净。
 
@@ -144,7 +149,7 @@
 | 重新生成编辑器格式工作流 | `ga comfy export-editor` |
 | 续等已提交的任务 | `ga comfy wait <prompt_id> [--timeout S] [--out D]` |
 | 文案 → 资源 | `ga run workflows/text_to_asset.json --set expand.brief=<描述> --set gen.n=1` |
-| 参考图 + 文案 → 资源 | `ga run workflows/ref_to_asset.json --set 'ref.image=@upload{<图片路径>}' --set expand.brief=<描述>` |
+| 参考图 + 文案 → 资源 | `ga run workflows/ref_to_asset.json --set ref.paths=<图片路径> --set expand.brief=<描述>`（多张用分号隔开） |
 | 风格样张 | `ga run workflows/style_samples.json --set expand.brief=<描述>` |
 | 模板合成 | `ga run workflows/compose_template.json --set 'art.image=@upload{<图>}' --set 'compose.vars_json={"name":"萬"}'`（先按 `examples/fonts/README.md` 下载示例字体） |
 | 只看补丁后的工作流 | `ga run <工作流> --set ... --dry-run`（不联网、不花钱） |
@@ -227,13 +232,15 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 | 用户说 | 做法 |
 |---|---|
 | "给我一枚铜钱图标" | `ga run workflows/text_to_asset.json --set expand.brief=<描述> --set gen.n=1 --json` |
-| 给了一张图，"做同风格的灯笼" | `ga run workflows/ref_to_asset.json --set 'ref.image=@upload{<绝对路径>}' --set expand.brief=<描述> --json` |
+| 给了一张图，"做同风格的灯笼" | `ga run workflows/ref_to_asset.json --set ref.paths=<绝对路径> --set expand.brief=<描述> --json` |
 | "先看看风格" | `ga run workflows/style_samples.json --set expand.brief=<描述> --json` |
 | "把这张图做成牌面，字写'萬'" | `ga run workflows/compose_template.json --set 'art.image=@upload{<路径>}' --set 'compose.vars_json={"name":"萬"}' --json` |
 | 给了一批物品 | 写一份清单 YAML，**先给用户确认**（建议总是设 `budget`），再 `ga batch start <清单> --json` |
 | "换一种画风" | 新写一张风格卡，`--set style.path=<卡路径>` |
+| "照这几张图的画风来" | 在出图命令上加 `--set 'ref.paths=<图1>;<图2>'`（`text_to_asset`、`style_samples` 也支持） |
+| "脚下有淡阴影 / 抠图有雾边" | 加 `--set save.clean_alpha=96` |
 
-常用可调项：`expand.asset_type`、`gen.size`、`gen.n`、`gen.profile`（用哪个模型）、`bg.method`。完整场景要把 `expand.asset_type` 设为 `illustration` 或 `background`，并保持 `bg.method=none`。不确定有哪些键时用 `--dry-run` 看全貌。
+常用可调项：`expand.asset_type`、`gen.size`、`gen.n`、`gen.profile`（用哪个模型）、`ref.paths`（参考图）、`bg.method`、`save.clean_alpha`。完整场景要把 `expand.asset_type` 设为 `illustration` 或 `background`，并保持 `bg.method=none`。不确定有哪些键时用 `--dry-run` 看全貌。
 
 每次出图后：把图片给用户看，说明用了什么描述和风格、文件在哪、估算费用多少（来自同名 `.json` 或批次的 `cost`；是按配置单价的估算）。
 
@@ -335,15 +342,16 @@ class GACloudGenerate:
 | 节点类 | `run` 里的关键调用 | 核心库位置 |
 |---|---|---|
 | `GAStyleCard` | `load_style_card` | `style.py` |
+| `GAReferenceImages` | `parse_ref_paths`、`load_ref_images` | `refs.py` |
 | `GAPromptExpand` | `expand_prompt` | `steps.py`，模板在 `prompts/expand.md` |
 | `GAReferenceAnalyze` | `analyze_reference` | `steps.py`，模板在 `prompts/analyze.md` |
 | `GACloudGenerate` / `GACloudEdit` | `router.generate` / `router.edit` | `providers/router.py` |
 | `GARemoveBackground` | `remove_background` | `imaging.py` |
 | `GAQCScore` | `qc_score` | `steps.py`，模板在 `prompts/qc.md` |
 | `GAComposeTemplate` | `compose` | `compose.py` |
-| `GASaveAsset` | 直接写 PNG 和 `.json` | 逻辑在节点里 |
+| `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha` | 写文件的逻辑在节点里，清理在 `imaging.py` |
 
-节点之间传五种数据：`STRING`、`IMAGE`、`MASK`、`GA_STYLE`（风格卡对象）、`GA_META`（随图流转的元数据字典）。ComfyUI 的 `IMAGE` 不带透明度，所以透明度单独放在 `MASK` 里并排传，约定 `mask = 1 - alpha`；少接一根 `mask` 线，透明背景就丢了。转换代码在 `comfy_nodes/tensors.py`。
+节点之间传六种数据：`STRING`、`IMAGE`、`MASK`、`GA_STYLE`（风格卡对象）、`GA_REFS`（参考图列表，每张保留原始尺寸）、`GA_META`（随图流转的元数据字典）。ComfyUI 的 `IMAGE` 不带透明度，所以透明度单独放在 `MASK` 里并排传，约定 `mask = 1 - alpha`；少接一根 `mask` 线，透明背景就丢了。转换代码在 `comfy_nodes/tensors.py`。
 
 **调用云端模型的链路**
 

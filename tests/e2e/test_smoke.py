@@ -87,7 +87,7 @@ def test_text_to_asset(made_asset: Path) -> None:
 
 
 def test_ref_to_asset(tmp_path: Path, ref_image: Path) -> None:
-    res = ga("run", str(REPO / "workflows/ref_to_asset.json"), "--set", f"ref.image=@upload{{{ref_image}}}",
+    res = ga("run", str(REPO / "workflows/ref_to_asset.json"), "--set", f"ref.paths={ref_image}",
              "--set", "expand.brief=同风格的灯笼", "--out", str(tmp_path))
     assert res["ok"]
     _assert_asset(res["files"])

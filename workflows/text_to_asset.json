@@ -8,6 +8,15 @@
       "title": "风格卡"
     }
   },
+  "ref": {
+    "class_type": "GAReferenceImages",
+    "inputs": {
+      "paths": ""
+    },
+    "_meta": {
+      "title": "参考图"
+    }
+  },
   "expand": {
     "class_type": "GAPromptExpand",
     "inputs": {
@@ -40,8 +49,8 @@
       "transparent": true,
       "seed": -1,
       "profile": "image",
-      "style": [
-        "style",
+      "refs": [
+        "ref",
         0
       ],
       "meta": [
@@ -88,7 +97,8 @@
       "meta": [
         "gen",
         2
-      ]
+      ],
+      "clean_alpha": 0
     },
     "_meta": {
       "title": "保存资产"

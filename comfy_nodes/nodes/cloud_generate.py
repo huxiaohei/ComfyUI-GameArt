@@ -1,12 +1,12 @@
-"""云端生图：提示词 → 云端出图模型；风格卡带参考图时改走 edit。"""
+"""云端生图：提示词 → 云端出图模型；接了参考图时改走 edit。"""
 from __future__ import annotations
 
 from typing import Any
 
 import torch
+from PIL import Image
 
 from game_art.providers.base import ImageRequest
-from game_art.style import StyleCard
 
 from .. import common
 from ..common import (
@@ -16,12 +16,12 @@ from ..common import (
     N_IN,
     NEGATIVE_IN,
     PROMPT_IN,
+    REFS_IN,
     TAG_IN,
     TRANSPARENT_IN,
     changed_unless_seeded,
     ga_errors,
     image_meta,
-    load_refs,
     model_input,
     parse_size,
     resolve_tag,
@@ -61,24 +61,24 @@ class GACloudGenerate:
                 "profile": model_input("image", "出图"),
             },
             "optional": {
-                "style": ("GA_STYLE", {"tooltip": (
-                    "接「风格卡」。只有风格卡里带了参考图时才起作用：会把参考图一并发给模型，让画风更贴近。"
-                    "文字上的风格要求已经由「提示词扩写」写进提示词了。")}),
+                "refs": ("GA_REFS", {"tooltip": (
+                    REFS_IN[1]["tooltip"] + "接上且里面有图时，会把参考图一并发给模型（走「按参考图生图」，"
+                    "用下面的 edit_profile），让画风更贴近；不接或参考图为空时就是普通的文字出图。")}),
                 "meta": META_IN, "tag": TAG_IN,
-                # 风格卡带参考图时改走 edit，用这个 profile
-                "edit_profile": model_input("image_edit", "风格卡带参考图时（这时走的是「按参考图生图」）出图"),
+                # 有参考图时改走 edit，用这个 profile
+                "edit_profile": model_input("image_edit", "有参考图时（这时走的是「按参考图生图」）出图"),
             },
         }
 
     @ga_errors
     def run(self, prompt: str, negative: str, size: str = "1024x1024", n: int = 1, transparent: bool = False,
-            seed: int = -1, profile: str = "image", style: StyleCard | None = None,
+            seed: int = -1, profile: str = "image", refs: list[Image.Image] | None = None,
             meta: dict[str, Any] | None = None, tag: str = "",
             edit_profile: str = "image_edit") -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
         wh = parse_size(size)
         tag = resolve_tag(tag, meta)
         router = common.get_router()
-        refs = load_refs(style) if style is not None and style.reference_images else []
+        refs = list(refs or [])
         req = ImageRequest(prompt=prompt, negative=negative, size=f"{wh[0]}x{wh[1]}", n=n,
                            transparent=transparent, seed=None if seed < 0 else seed, refs=refs)
         if refs:

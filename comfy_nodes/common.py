@@ -20,7 +20,6 @@ from game_art.errors import GAError, InputError, UpstreamError
 from game_art.models import all_model_choices
 from game_art.providers.base import ChatResult, ImageResult, Message
 from game_art.providers.router import Router
-from game_art.style import StyleCard
 
 from .tensors import tensors_to_pils
 
@@ -116,17 +115,10 @@ def unify(images: list[Image.Image], size: tuple[int, int]) -> list[Image.Image]
     return images
 
 
-def load_refs(style: StyleCard) -> list[Image.Image]:
-    refs: list[Image.Image] = []
-    for p in style.reference_images:
-        try:
-            with Image.open(p) as im:
-                refs.append(im.convert("RGBA"))
-        except FileNotFoundError as e:
-            raise InputError("image_not_found", f"风格卡参考图不存在：{p}") from e
-        except OSError as e:
-            raise InputError("image_unreadable", f"无法读取风格卡参考图 {p}：{e}") from e
-    return refs
+def collect_refs(images: torch.Tensor | None, refs: list[Image.Image] | None) -> list[Image.Image]:
+    """把 IMAGE 口进来的图（排前面）和「参考图」节点给的列表合成一个列表；两边都可以不接。"""
+    out: list[Image.Image] = tensors_to_pils(images) if images is not None else []
+    return out + list(refs or [])
 
 
 def edit_mask(mask: torch.Tensor, size: tuple[int, int]) -> Image.Image:
@@ -156,6 +148,7 @@ META_IN = ("GA_META", {"tooltip": (
     "上游节点传来的记录信息（原始描述、提示词、所用模型等）。接上以后，这些信息会一路带到"
     "「保存资产」，写进图片旁边的 .json 文件，方便以后追溯这张图是怎么来的。可以不接。")})
 STYLE_IN = ("GA_STYLE", {"tooltip": "接「风格卡」节点的输出。不接则不套用任何统一风格。"})
+REFS_IN = ("GA_REFS", {"tooltip": "接「参考图」节点的 refs 输出：一张或多张参考图，各自保留原始尺寸。"})
 META_OUT = "这一步的记录信息（提示词、模型、种子、估算费用等），接到下游节点的 meta。"
 N_IN = ("INT", {"default": 1, "min": 1, "max": 16, "tooltip": (
     "一次出几张图。同一段提示词会得到几张不同的结果，便于挑选。按张计费，张数越多越贵。")})

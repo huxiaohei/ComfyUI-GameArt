@@ -35,8 +35,8 @@ class GAStyleCard:
                 "rules:\n  - 色块之间用细金线勾边"), "tooltip": (
                 "直接编辑风格内容，格式是「字段: 值」，一行一个。这里写了的字段覆盖文件里的同名字段，"
                 "没写的沿用文件。可用字段：name（名称）、description（一句话描述）、palette（色板，颜色列表）、"
-                "positive（希望出现的风格关键词）、negative（不希望出现的）、rules（规则列表）、"
-                "reference_images（参考图路径列表）。只有 name 和 description 必填，其余都可以不写；"
+                "positive（希望出现的风格关键词）、negative（不希望出现的）、rules（规则列表）。"
+                "参考图不写在这里，用「参考图」节点。只有 name 和 description 必填，其余都可以不写；"
                 "不想设置的字段整行删掉，或只留字段名不写值（如单独一行 palette:），都表示不设置。")})},
         }
 

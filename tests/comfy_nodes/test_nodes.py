@@ -18,7 +18,7 @@ from game_art.providers.base import ChatResult, ImageRequest, ImageResult, Messa
 from game_art.style import StyleCard
 from tests.conftest import write_cfg
 
-ALL = {"GAStyleCard", "GAPromptExpand", "GAReferenceAnalyze", "GACloudGenerate", "GACloudEdit",
+ALL = {"GAStyleCard", "GAReferenceImages", "GAPromptExpand", "GAReferenceAnalyze", "GACloudGenerate", "GACloudEdit",
        "GARemoveBackground", "GAQCScore", "GAComposeTemplate", "GASaveAsset"}
 
 
@@ -126,16 +126,57 @@ def test_generate_unifies_mismatched_sizes(monkeypatch: pytest.MonkeyPatch) -> N
     assert tuple(image.shape) == (2, 12, 16, 3)
 
 
-def test_generate_with_style_refs_switches_to_edit(router: FakeRouter, tmp_path: pathlib.Path) -> None:
-    ref = tmp_path / "r.png"
-    Image.new("RGB", (4, 4), (1, 2, 3)).save(ref)
-    style = StyleCard(name="s", description="d", reference_images=[ref])
-    nodes.GACloudGenerate().run(prompt="x", negative="", style=style, edit_profile="my_edit")
+def test_generate_with_refs_switches_to_edit(router: FakeRouter, tmp_path: pathlib.Path) -> None:
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    Image.new("RGB", (4, 4), (1, 2, 3)).save(a)
+    Image.new("RGBA", (6, 2), (4, 5, 6, 7)).save(b)
+    refs, _preview = nodes.GAReferenceImages().run(paths=f"{a}\n{b}")
+    nodes.GACloudGenerate().run(prompt="x", negative="", refs=refs, edit_profile="my_edit")
     kind, profile, req, _ = router.calls[0]
-    assert kind == "edit" and profile == "my_edit" and len(req.refs) == 1
-    # 无参考图的风格卡仍走 generate
-    nodes.GACloudGenerate().run(prompt="x", negative="", style=StyleCard(name="s", description="d"))
-    assert router.calls[1][0] == "generate"
+    assert kind == "edit" and profile == "my_edit"
+    assert [r.size for r in req.refs] == [(4, 4), (6, 2)]  # 多张、各自保留原始尺寸
+    # 不接参考图、或参考图节点为空时仍走 generate
+    nodes.GACloudGenerate().run(prompt="x", negative="")
+    empty, _ = nodes.GAReferenceImages().run(paths="")
+    nodes.GACloudGenerate().run(prompt="x", negative="", refs=empty)
+    assert [c[0] for c in router.calls[1:]] == ["generate", "generate"]
+
+
+def test_reference_images_node(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    monkeypatch.setitem(sys.modules, "folder_paths", types.SimpleNamespace(
+        get_input_directory=lambda: str(input_dir)))
+    a, b = tmp_path / "a.png", input_dir / "b.png"
+    Image.new("RGBA", (8, 4), (255, 0, 0, 255)).save(a)
+    Image.new("RGB", (2, 6), (0, 255, 0)).save(b)
+    # 一行一个；分号也行；空行、# 注释、两端引号都能处理；只写文件名 = ComfyUI input 目录
+    text = f"\n# 注释\n'{a}' ; b.png\n\n"
+    refs, preview = nodes.GAReferenceImages().run(paths=text)
+    assert [(r.mode, r.size) for r in refs] == [("RGBA", (8, 4)), ("RGBA", (2, 6))]
+    assert tuple(preview.shape) == (2, 4, 8, 3)  # 预览统一成第一张的尺寸
+    # images 口进来的图排在 paths 后面
+    refs, preview = nodes.GAReferenceImages().run(paths=str(a), images=torch.zeros(2, 5, 5, 3))
+    assert [r.size for r in refs] == [(8, 4), (5, 5), (5, 5)] and preview.shape[0] == 3
+    # 留空 = 不用参考图
+    refs, preview = nodes.GAReferenceImages().run()
+    assert refs == [] and tuple(preview.shape) == (1, 64, 64, 3)
+    with pytest.raises(RuntimeError, match="参考图不存在"):
+        nodes.GAReferenceImages().run(paths=str(tmp_path / "nope.png"))
+    (tmp_path / "bad.png").write_text("not an image")
+    with pytest.raises(RuntimeError, match="无法读取参考图"):
+        nodes.GAReferenceImages().run(paths=str(tmp_path / "bad.png"))
+
+
+def test_reference_images_is_changed_follows_files(tmp_path: pathlib.Path) -> None:
+    a = tmp_path / "a.png"
+    Image.new("RGB", (2, 2)).save(a)
+    cls: Any = nodes.GAReferenceImages
+    first = cls.IS_CHANGED(paths=str(a))
+    assert first == cls.IS_CHANGED(paths=str(a))  # 文件没变可复用
+    Image.new("RGB", (9, 9), (1, 1, 1)).save(a)
+    assert cls.IS_CHANGED(paths=str(a)) != first  # 同一路径换了内容要重读
+    assert cls.IS_CHANGED(paths="") == "" and "missing" in cls.IS_CHANGED(paths=str(tmp_path / "x.png"))
 
 
 def test_edit_node_passes_refs_and_mask(router: FakeRouter) -> None:
@@ -146,6 +187,20 @@ def test_edit_node_passes_refs_and_mask(router: FakeRouter) -> None:
     assert kind == "edit" and profile == "image_edit" and len(req.refs) == 1
     assert req.mask.mode == "RGBA" and req.mask.getpixel((0, 0))[3] == 0  # alpha = 1 - mask
     assert meta["provider"] == "fake"
+
+
+def test_edit_node_accepts_refs_and_requires_an_image(router: FakeRouter) -> None:
+    refs = [Image.new("RGBA", (6, 4)), Image.new("RGBA", (2, 2))]
+    nodes.GACloudEdit().run(prompt="改", refs=refs)
+    assert [r.size for r in router.calls[0][2].refs] == [(6, 4), (2, 2)]
+    # 两个都接：images 里的原图排最前（蒙版按它的尺寸）
+    nodes.GACloudEdit().run(prompt="改", refs=refs, images=torch.zeros(1, 8, 8, 3), mask=torch.ones(1, 8, 8))
+    req = router.calls[1][2]
+    assert [r.size for r in req.refs] == [(8, 8), (6, 4), (2, 2)] and req.mask.size == (8, 8)
+    with pytest.raises(RuntimeError, match="至少需要一张图"):
+        nodes.GACloudEdit().run(prompt="改")
+    with pytest.raises(RuntimeError, match="至少需要一张图"):
+        nodes.GACloudEdit().run(prompt="改", refs=[])
 
 
 def test_prompt_expand_meta(router: FakeRouter) -> None:
@@ -162,6 +217,10 @@ def test_reference_analyze_and_qc(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(common, "get_router", lambda: r)
     (desc,) = nodes.GAReferenceAnalyze().run(images=torch.zeros(2, 8, 8, 3))
     assert desc == "好看的描述" and len(r.calls[0][2][1].images) == 2
+    nodes.GAReferenceAnalyze().run(refs=[Image.new("RGBA", (4, 4))], images=torch.zeros(1, 8, 8, 3))
+    assert [im.size for im in r.calls[1][2][1].images] == [(8, 8), (4, 4)]
+    with pytest.raises(RuntimeError, match="至少需要一张图片"):
+        nodes.GAReferenceAnalyze().run()
     r.text = '{"score":4,"issues":["糊"]}'
     score, report = nodes.GAQCScore().run(image=torch.zeros(1, 8, 8, 3), brief="龙", threshold=6)
     assert score == 4.0 and "糊" in report and "未通过" in report
@@ -211,6 +270,26 @@ def test_save_asset_writes_png_and_sidecar(out_dir: pathlib.Path) -> None:
     # 再存一次接着编号
     res = nodes.GASaveAsset().save(image=img[:1], subfolder="icons", name="dragon")
     assert res["ui"]["images"][0]["filename"] == "dragon_00003.png"
+
+
+def test_save_asset_clean_alpha(out_dir: pathlib.Path) -> None:
+    # 9x9：中间一列实体，右边紧贴一列抗锯齿边，最右一列是远离主体的淡阴影
+    im = Image.new("RGBA", (9, 9), (0, 0, 0, 0))
+    for y in range(9):
+        im.putpixel((2, y), (10, 20, 30, 255))
+        im.putpixel((3, y), (10, 20, 30, 40))
+        im.putpixel((8, y), (10, 20, 30, 40))
+    img, mask = pil_to_tensors([im])
+    nodes.GASaveAsset().save(image=img, mask=mask, subfolder="c", name="keep")
+    nodes.GASaveAsset().save(image=img, mask=mask, subfolder="c", name="clean", clean_alpha=96, meta={"a": 1})
+    keep, clean = Image.open(out_dir / "c" / "keep_00001.png"), Image.open(out_dir / "c" / "clean_00001.png")
+    assert _px(keep, (8, 4))[3] == 40  # 默认 0：原样保存
+    assert _px(clean, (8, 4))[3] == 0 and _px(clean, (3, 4))[3] == 40 and _px(clean, (2, 4))[3] == 255
+    assert json.loads((out_dir / "c" / "clean_00001.json").read_text(encoding="utf-8"))["clean_alpha"] == 96
+    assert "clean_alpha" not in json.loads((out_dir / "c" / "keep_00001.json").read_text(encoding="utf-8"))
+    # 没接 mask 的不透明图不受影响
+    nodes.GASaveAsset().save(image=img, subfolder="c", name="opaque", clean_alpha=200)
+    assert Image.open(out_dir / "c" / "opaque_00001.png").getchannel("A").getextrema() == (255, 255)
 
 
 def test_save_asset_fills_first_free_number(out_dir: pathlib.Path) -> None:

@@ -8,6 +8,7 @@ from PIL import Image
 
 from game_art.errors import InputError
 from game_art.imaging import (
+    clean_faint_alpha,
     contact_sheet,
     fit_canvas,
     flatten_for_review,
@@ -107,3 +108,30 @@ def test_rembg_hint_falls_back_when_config_broken(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("GAME_ART_CONFIG", str(tmp_path / "missing.yaml"))
     from game_art.imaging import _rembg_hint
     assert "Documents/ComfyUI/.venv/bin/python3 -m pip install rembg" in _rembg_hint()
+
+
+def test_clean_faint_alpha_removes_detached_haze_keeps_edges() -> None:
+    im = Image.new("RGBA", (12, 6), (0, 0, 0, 0))
+    for y in range(6):
+        im.putpixel((1, y), (9, 9, 9, 255))    # 实体
+        im.putpixel((2, y), (9, 9, 9, 60))     # 紧贴实体的抗锯齿边
+        im.putpixel((3, y), (9, 9, 9, 30))     # 仍在 edge=2 范围内
+        im.putpixel((4, y), (9, 9, 9, 30))     # 超出范围：擦掉
+        im.putpixel((10, y), (7, 8, 9, 60))    # 远处的淡阴影：擦掉
+    out = clean_faint_alpha(im, 96)
+    alphas = [out.getchannel("A").getpixel((x, 3)) for x in (1, 2, 3, 4, 10)]
+    assert alphas == [255, 60, 30, 0, 0]
+    assert out.getpixel((10, 3)) == (7, 8, 9, 0)  # 只改透明度，不改颜色
+    assert im.getchannel("A").getpixel((10, 3)) == 60  # 不修改入参
+    # 阴影自身的透明度达到阈值时算实体，不会被擦
+    assert clean_faint_alpha(im, 60).getchannel("A").getpixel((10, 3)) == 60
+    # edge=0：只留达到阈值的像素
+    assert [clean_faint_alpha(im, 96, edge=0).getchannel("A").getpixel((x, 3)) for x in (1, 2)] == [255, 0]
+
+
+def test_clean_faint_alpha_zero_is_noop_and_handles_rgb() -> None:
+    im = Image.new("RGBA", (4, 4), (1, 2, 3, 10))
+    assert clean_faint_alpha(im, 0).tobytes() == im.tobytes()
+    assert clean_faint_alpha(Image.new("RGB", (4, 4), (5, 5, 5)), 128).getpixel((0, 0)) == (5, 5, 5, 255)
+    # 整张都很淡：全部擦掉；阈值超过 255 按 255 算
+    assert clean_faint_alpha(im, 999).getchannel("A").getextrema() == (0, 0)

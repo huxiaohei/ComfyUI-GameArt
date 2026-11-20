@@ -10,6 +10,7 @@ from typing import Any
 import torch
 
 from game_art.errors import InputError
+from game_art.imaging import clean_faint_alpha
 
 from ..common import CATEGORY, META_IN, ga_errors
 from ..tensors import tensors_to_pils
@@ -52,12 +53,20 @@ class GASaveAsset:
             "optional": {
                 "mask": ("MASK", {"tooltip": "透明度蒙版。接上才会存成透明背景；不接则存成不透明图片。"}),
                 "meta": META_IN,
+                "clean_alpha": ("INT", {"default": 0, "min": 0, "max": 255, "tooltip": (
+                    "清理半透明残留，用来去掉模型画在主体脚下的淡阴影、抠图留下的雾边。\n"
+                    "· 0：不清理（默认）。\n"
+                    "· 大于 0：透明度（0 全透明～255 不透明）低于这个值、又不紧贴主体的像素，会被擦成全透明；"
+                    "紧贴主体的抗锯齿边缘保留。淡阴影一般用 64～128。\n"
+                    "只对带透明底的图有效（要接上 mask）。数值越大擦得越多，"
+                    "画面里本来就该半透明的东西（薄纱、烟雾、光晕）也会被擦掉，这类素材保持 0。")}),
             },
         }
 
     @ga_errors
     def save(self, image: torch.Tensor, subfolder: str = "", name: str = "asset",
-             mask: torch.Tensor | None = None, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+             mask: torch.Tensor | None = None, meta: dict[str, Any] | None = None,
+             clean_alpha: int = 0) -> dict[str, Any]:
         import folder_paths  # ComfyUI 之外不存在，惰性导入
 
         sub, name = _safe_subfolder(subfolder), _safe_name(name)
@@ -68,7 +77,7 @@ class GASaveAsset:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # 无 mask 时也写 RGBA（alpha 全不透明），保持产物格式一致
-        pils = [im.convert("RGBA") for im in tensors_to_pils(image, mask)]
+        pils = [clean_faint_alpha(im, clean_alpha) for im in tensors_to_pils(image, mask)]
         saved: list[dict[str, str]] = []
         counter = 1
         for im in pils:
@@ -78,6 +87,8 @@ class GASaveAsset:
             fname = f"{name}_{counter:05d}.png"
             im.save(target_dir / fname, format="PNG")
             side = dict(meta or {})
+            if clean_alpha > 0:
+                side["clean_alpha"] = clean_alpha
             side.update(file=fname, saved_at=datetime.now(UTC).isoformat())
             (target_dir / f"{name}_{counter:05d}.json").write_text(
                 json.dumps(side, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

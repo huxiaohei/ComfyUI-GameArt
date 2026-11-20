@@ -92,13 +92,18 @@ def test_qc_clamps_and_passes() -> None:
     assert r.score == 0 and not r.passed
 
 
-def test_style_card_relative_refs(tmp_path: Path) -> None:
-    (tmp_path / "refs").mkdir()
+def test_style_card_rejects_reference_images(tmp_path: Path) -> None:
+    """参考图改由「参考图」节点提供；旧风格卡里还留着这个字段时要明确报错，而不是悄悄忽略。"""
     card = tmp_path / "c.yaml"
     card.write_text("name: n\ndescription: d\nreference_images: [refs/a.png]\n", encoding="utf-8")
-    s = load_style_card(card)
-    assert s.reference_images == [(tmp_path / "refs" / "a.png").resolve()]
-    assert s.reference_images[0].is_absolute()
+    with pytest.raises(InputError, match="参考图 · ref") as e:
+        load_style_card(card)
+    assert e.value.code == "bad_style_card"
+    with pytest.raises(InputError, match="reference_images"):
+        load_style_card(None, "name: n\ndescription: d\nreference_images:\n  - a.png\n")
+    # 只留字段名不写值 = 不设置，仍然能读
+    card.write_text("name: n\ndescription: d\nreference_images:\n", encoding="utf-8")
+    assert load_style_card(card).name == "n"
 
 
 def test_style_card_bad_file(tmp_path: Path) -> None:

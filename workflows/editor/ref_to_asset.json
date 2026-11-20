@@ -6,7 +6,7 @@
   "nodes": [
     {
       "id": 1,
-      "type": "LoadImage",
+      "type": "GAReferenceImages",
       "title": "参考图 · ref",
       "pos": [
         80,
@@ -14,43 +14,47 @@
       ],
       "size": [
         340,
-        112
+        196
       ],
       "flags": {},
       "order": 0,
       "mode": 0,
       "inputs": [
         {
-          "name": "image",
-          "type": "COMBO",
+          "name": "paths",
+          "type": "STRING",
           "link": null,
           "widget": {
-            "name": "image"
+            "name": "paths"
           }
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "IMAGE",
-          "type": "IMAGE",
+          "name": "refs",
+          "type": "GA_REFS",
           "links": [
             1,
-            4
+            6
           ]
         },
         {
-          "name": "MASK",
-          "type": "MASK",
+          "name": "preview",
+          "type": "IMAGE",
           "links": null
         }
       ],
       "properties": {
-        "Node name for S&R": "LoadImage",
+        "Node name for S&R": "GAReferenceImages",
         "ga_id": "ref"
       },
       "widgets_values": [
-        "reference.png",
-        "image"
+        ""
       ]
     },
     {
@@ -63,17 +67,12 @@
       ],
       "size": [
         340,
-        164
+        190
       ],
       "flags": {},
       "order": 2,
       "mode": 0,
       "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 1
-        },
         {
           "name": "focus",
           "type": "STRING",
@@ -89,6 +88,16 @@
           "widget": {
             "name": "profile"
           }
+        },
+        {
+          "name": "refs",
+          "type": "GA_REFS",
+          "link": 1
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
         },
         {
           "name": "tag",
@@ -124,7 +133,7 @@
       "title": "风格卡 · style",
       "pos": [
         80,
-        252
+        336
       ],
       "size": [
         340,
@@ -236,7 +245,7 @@
           "name": "prompt",
           "type": "STRING",
           "links": [
-            5,
+            4,
             13
           ]
         },
@@ -244,7 +253,7 @@
           "name": "negative",
           "type": "STRING",
           "links": [
-            6,
+            5,
             14
           ]
         },
@@ -278,26 +287,21 @@
       ],
       "size": [
         340,
-        320
+        346
       ],
       "flags": {},
       "order": 4,
       "mode": 0,
       "inputs": [
         {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 4
-        },
-        {
           "name": "prompt",
           "type": "STRING",
-          "link": 5
+          "link": 4
         },
         {
           "name": "negative",
           "type": "STRING",
-          "link": 6
+          "link": 5
         },
         {
           "name": "size",
@@ -330,6 +334,16 @@
           "widget": {
             "name": "profile"
           }
+        },
+        {
+          "name": "refs",
+          "type": "GA_REFS",
+          "link": 6
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
         },
         {
           "name": "mask",
@@ -490,6 +504,14 @@
           "name": "meta",
           "type": "GA_META",
           "link": 12
+        },
+        {
+          "name": "clean_alpha",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "clean_alpha"
+          }
         }
       ],
       "outputs": [],
@@ -499,7 +521,8 @@
       },
       "widgets_values": [
         "ga/ref_to_asset",
-        "asset"
+        "asset",
+        0
       ]
     },
     {
@@ -508,7 +531,7 @@
       "title": "查看正向提示词 · show_prompt",
       "pos": [
         1340,
-        460
+        486
       ],
       "size": [
         340,
@@ -543,7 +566,7 @@
       "title": "查看反向提示词 · show_negative",
       "pos": [
         1340,
-        760
+        786
       ],
       "size": [
         340,
@@ -579,8 +602,8 @@
       1,
       0,
       2,
-      0,
-      "IMAGE"
+      2,
+      "GA_REFS"
     ],
     [
       2,
@@ -600,34 +623,34 @@
     ],
     [
       4,
-      1,
+      4,
       0,
       5,
       0,
-      "IMAGE"
+      "STRING"
     ],
     [
       5,
       4,
-      0,
+      1,
       5,
       1,
       "STRING"
     ],
     [
       6,
-      4,
       1,
+      0,
       5,
-      2,
-      "STRING"
+      6,
+      "GA_REFS"
     ],
     [
       7,
       4,
       2,
       5,
-      8,
+      9,
       "GA_META"
     ],
     [

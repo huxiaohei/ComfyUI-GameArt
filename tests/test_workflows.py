@@ -81,17 +81,23 @@ def test_expected_structure() -> None:
     assert t["save"]["inputs"]["subfolder"] == "ga/text_to_asset" and t["save"]["inputs"]["name"] == "asset"
     assert t["bg"]["inputs"]["image"] == ["gen", 0] and t["bg"]["inputs"]["mask"] == ["gen", 1]
     assert t["save"]["inputs"]["image"] == ["bg", 0] and t["save"]["inputs"]["mask"] == ["bg", 1]
+    # 参考图由 ref 节点提供（默认留空 = 纯文字出图），不再经过风格卡
+    assert t["ref"]["class_type"] == "GAReferenceImages" and t["ref"]["inputs"]["paths"] == ""
+    assert t["gen"]["inputs"]["refs"] == ["ref", 0] and "style" not in t["gen"]["inputs"]
+    assert t["save"]["inputs"]["clean_alpha"] == 0
     # 扩写出的提示词在画布上看得见
     assert t["show_prompt"]["inputs"]["source"] == ["expand", 0]
     assert t["show_negative"]["inputs"]["source"] == ["expand", 1]
     r = load_workflow(WF_DIR / "ref_to_asset.json")
-    assert r["ref"]["class_type"] == "LoadImage" and r["ref"]["inputs"]["image"] == "reference.png"
+    assert r["ref"]["class_type"] == "GAReferenceImages" and r["ref"]["inputs"]["paths"] == ""
     assert r["expand"]["inputs"]["ref_description"] == ["analyze", 0]
-    assert r["edit"]["inputs"]["images"] == ["ref", 0]
+    assert r["analyze"]["inputs"]["refs"] == ["ref", 0] and r["edit"]["inputs"]["refs"] == ["ref", 0]
+    assert "images" not in r["edit"]["inputs"] and "images" not in r["analyze"]["inputs"]
     assert r["bg"]["inputs"]["image"] == ["edit", 0] and r["bg"]["inputs"]["mask"] == ["edit", 1]
     assert r["save"]["inputs"]["mask"] == ["bg", 1]
     s = load_workflow(WF_DIR / "style_samples.json")
     assert s["gen"]["inputs"]["n"] == 4 and s["save"]["inputs"]["subfolder"] == "style_samples"
+    assert s["gen"]["inputs"]["refs"] == ["ref", 0] and "style" not in s["gen"]["inputs"]
     assert s["save"]["inputs"]["image"] == ["gen", 0] and s["save"]["inputs"]["mask"] == ["gen", 1]
     c = load_workflow(WF_DIR / "compose_template.json")
     assert c["compose"]["inputs"]["vars_json"] == '{"name": "萬"}'

@@ -1,8 +1,8 @@
 {
   "ref": {
-    "class_type": "LoadImage",
+    "class_type": "GAReferenceImages",
     "inputs": {
-      "image": "reference.png"
+      "paths": ""
     },
     "_meta": {
       "title": "参考图"
@@ -11,7 +11,7 @@
   "analyze": {
     "class_type": "GAReferenceAnalyze",
     "inputs": {
-      "images": [
+      "refs": [
         "ref",
         0
       ],
@@ -55,7 +55,7 @@
   "edit": {
     "class_type": "GACloudEdit",
     "inputs": {
-      "images": [
+      "refs": [
         "ref",
         0
       ],
@@ -114,7 +114,8 @@
       "meta": [
         "edit",
         2
-      ]
+      ],
+      "clean_alpha": 0
     },
     "_meta": {
       "title": "保存资产"

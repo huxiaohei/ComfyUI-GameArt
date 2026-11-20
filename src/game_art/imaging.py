@@ -6,7 +6,7 @@ import io
 import math
 from typing import Literal, cast
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from game_art.errors import InputError
 
@@ -73,6 +73,21 @@ def trim_alpha(img: Image.Image, padding: int = 0) -> Image.Image:
     left, top = max(0, left - padding), max(0, top - padding)
     right, bottom = min(rgba.width, right + padding), min(rgba.height, bottom + padding)
     return rgba.crop((left, top, right, bottom))
+
+
+def clean_faint_alpha(img: Image.Image, threshold: int, edge: int = 2) -> Image.Image:
+    """清理半透明残留：透明度低于 threshold、且离"实体像素"（透明度不低于 threshold）超过 edge 个像素的点，
+    擦成全透明。用来去掉模型画在主体脚下的淡阴影、抠图留下的雾边；紧贴主体的抗锯齿边缘不动。
+    threshold <= 0 表示不清理；颜色通道不改。"""
+    rgba = img.convert("RGBA")
+    if threshold <= 0:
+        return rgba
+    threshold = min(threshold, 255)
+    alpha = rgba.getchannel("A")
+    solid = alpha.point(lambda a: 255 if a >= threshold else 0)
+    keep = solid.filter(ImageFilter.MaxFilter(2 * max(edge, 0) + 1))
+    rgba.putalpha(Image.composite(alpha, Image.new("L", rgba.size, 0), keep))
+    return rgba
 
 
 def fit_canvas(img: Image.Image, size: tuple[int, int], align: str = "center") -> Image.Image:

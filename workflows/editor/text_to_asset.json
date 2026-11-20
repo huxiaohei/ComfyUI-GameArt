@@ -1,7 +1,7 @@
 {
   "id": "1a9a143b-23ea-53d4-91cc-84301432d41c",
   "revision": 0,
-  "last_node_id": 7,
+  "last_node_id": 8,
   "last_link_id": 12,
   "nodes": [
     {
@@ -42,8 +42,7 @@
           "name": "style",
           "type": "GA_STYLE",
           "links": [
-            1,
-            4
+            1
           ]
         }
       ],
@@ -58,6 +57,58 @@
     },
     {
       "id": 2,
+      "type": "GAReferenceImages",
+      "title": "参考图 · ref",
+      "pos": [
+        80,
+        336
+      ],
+      "size": [
+        340,
+        196
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "paths",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "paths"
+          }
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "refs",
+          "type": "GA_REFS",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "preview",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GAReferenceImages",
+        "ga_id": "ref"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 3,
       "type": "GAPromptExpand",
       "title": "提示词扩写 · expand",
       "pos": [
@@ -69,7 +120,7 @@
         384
       ],
       "flags": {},
-      "order": 1,
+      "order": 2,
       "mode": 0,
       "inputs": [
         {
@@ -156,7 +207,7 @@
       ]
     },
     {
-      "id": 3,
+      "id": 4,
       "type": "GACloudGenerate",
       "title": "云端生图 · gen",
       "pos": [
@@ -168,7 +219,7 @@
         346
       ],
       "flags": {},
-      "order": 2,
+      "order": 3,
       "mode": 0,
       "inputs": [
         {
@@ -222,8 +273,8 @@
           }
         },
         {
-          "name": "style",
-          "type": "GA_STYLE",
+          "name": "refs",
+          "type": "GA_REFS",
           "link": 4
         },
         {
@@ -287,7 +338,7 @@
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "GARemoveBackground",
       "title": "去背景 · bg",
       "pos": [
@@ -299,7 +350,7 @@
         138
       ],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 0,
       "inputs": [
         {
@@ -346,7 +397,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "GASaveAsset",
       "title": "保存资产 · save",
       "pos": [
@@ -358,7 +409,7 @@
         240
       ],
       "flags": {},
-      "order": 6,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
@@ -391,6 +442,14 @@
           "name": "meta",
           "type": "GA_META",
           "link": 10
+        },
+        {
+          "name": "clean_alpha",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "clean_alpha"
+          }
         }
       ],
       "outputs": [],
@@ -400,11 +459,12 @@
       },
       "widgets_values": [
         "ga/text_to_asset",
-        "asset"
+        "asset",
+        0
       ]
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "PreviewAny",
       "title": "查看正向提示词 · show_prompt",
       "pos": [
@@ -416,7 +476,7 @@
         240
       ],
       "flags": {},
-      "order": 3,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
@@ -439,7 +499,7 @@
       "widgets_values": []
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "PreviewAny",
       "title": "查看反向提示词 · show_negative",
       "pos": [
@@ -451,7 +511,7 @@
         240
       ],
       "flags": {},
-      "order": 4,
+      "order": 5,
       "mode": 0,
       "inputs": [
         {
@@ -479,95 +539,95 @@
       1,
       1,
       0,
-      2,
+      3,
       3,
       "GA_STYLE"
     ],
     [
       2,
-      2,
-      0,
       3,
+      0,
+      4,
       0,
       "STRING"
     ],
     [
       3,
-      2,
-      1,
       3,
+      1,
+      4,
       1,
       "STRING"
     ],
     [
       4,
-      1,
+      2,
       0,
-      3,
+      4,
       7,
-      "GA_STYLE"
+      "GA_REFS"
     ],
     [
       5,
-      2,
-      2,
       3,
+      2,
+      4,
       8,
       "GA_META"
     ],
     [
       6,
-      3,
-      0,
       4,
+      0,
+      5,
       0,
       "IMAGE"
     ],
     [
       7,
-      3,
-      1,
       4,
+      1,
+      5,
       2,
       "MASK"
     ],
     [
       8,
-      4,
-      0,
       5,
+      0,
+      6,
       0,
       "IMAGE"
     ],
     [
       9,
-      4,
-      1,
       5,
+      1,
+      6,
       3,
       "MASK"
     ],
     [
       10,
-      3,
+      4,
       2,
-      5,
+      6,
       4,
       "GA_META"
     ],
     [
       11,
-      2,
+      3,
       0,
-      6,
+      7,
       0,
       "STRING"
     ],
     [
       12,
-      2,
+      3,
       1,
-      7,
+      8,
       0,
       "STRING"
     ]

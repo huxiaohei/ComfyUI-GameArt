@@ -16,7 +16,6 @@ class StyleCard(BaseModel):
     positive: str = ""
     negative: str = ""
     rules: list[str] = []
-    reference_images: list[Path] = []
 
     def to_prompt_text(self) -> str:
         """渲染成给模型看的风格说明。"""
@@ -48,7 +47,6 @@ def load_style_card(path: Path | None, overrides: str = "") -> StyleCard:
     """读取风格卡。overrides 是一段 YAML 文本，里面写了的字段覆盖文件里的同名字段；
     不给 path 时完全由 overrides 定义（此时至少要有 name 和 description）。"""
     data: dict[str, object] = {}
-    base = Path.cwd()
     where = "直接编辑的内容"
     if path is not None:
         path = Path(path).expanduser()
@@ -60,7 +58,6 @@ def load_style_card(path: Path | None, overrides: str = "") -> StyleCard:
         data = _read_mapping(text, where)
         if not data:
             raise InputError("bad_style_card", f"风格卡格式不对（应为键值映射）: {path}")
-        base = path.resolve().parent
     extra = _read_mapping(overrides, "直接编辑的内容") if overrides.strip() else {}
     if path is None and not extra:
         raise InputError("bad_style_card", "风格卡为空：请填写文件路径，或在编辑框里直接写风格内容")
@@ -70,6 +67,11 @@ def load_style_card(path: Path | None, overrides: str = "") -> StyleCard:
     # 只写了字段名、没写值（如单独一行 "palette:"）表示"这项不设置"，按空处理；
     # 写在编辑框里时同样会清掉文件里的同名字段
     data = {k: v for k, v in data.items() if v is not None}
+    if "reference_images" in data:
+        raise InputError("bad_style_card", (
+            f"风格卡不再支持 reference_images: {where}\n"
+            "参考图现在由工作流里的「参考图 · ref」节点提供：把这些图片路径填到该节点的 paths（一行一个），"
+            "并从风格卡里删掉 reference_images 这一项。"))
     missing = [k for k in ("name", "description") if not str(data.get(k, "")).strip()]
     if missing:
         raise InputError("bad_style_card", f"风格卡缺少必填字段 {'、'.join(missing)}: {where}（其余字段都可以不写）")
@@ -80,10 +82,6 @@ def load_style_card(path: Path | None, overrides: str = "") -> StyleCard:
         raise InputError(
             "bad_style_card",
             f"风格卡字段不合法: {where}\n{problems}\n"
-            "提示：palette、rules、reference_images 要写成列表（每项一行、以 \"- \" 开头），其余字段写成一行文字。",
+            "提示：palette、rules 要写成列表（每项一行、以 \"- \" 开头），其余字段写成一行文字。",
         ) from e
-    card.reference_images = [
-        (p.expanduser() if p.expanduser().is_absolute() else base / p).resolve()
-        for p in card.reference_images
-    ]
     return card

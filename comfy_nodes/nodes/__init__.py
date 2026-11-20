@@ -8,18 +8,20 @@ from .compose_template import GAComposeTemplate
 from .prompt_expand import GAPromptExpand
 from .qc_score import GAQCScore
 from .reference_analyze import GAReferenceAnalyze
+from .reference_images import GAReferenceImages
 from .remove_background import GARemoveBackground
 from .save_asset import GASaveAsset
 from .style_card import GAStyleCard
 
 _NODES: tuple[type, ...] = (
-    GAStyleCard, GAPromptExpand, GAReferenceAnalyze, GACloudGenerate, GACloudEdit,
+    GAStyleCard, GAReferenceImages, GAPromptExpand, GAReferenceAnalyze, GACloudGenerate, GACloudEdit,
     GARemoveBackground, GAQCScore, GAComposeTemplate, GASaveAsset)
 
 NODE_CLASS_MAPPINGS: dict[str, type] = {c.__name__: c for c in _NODES}
 
 NODE_DISPLAY_NAME_MAPPINGS: dict[str, str] = {
     "GAStyleCard": "GA Style Card", "GAPromptExpand": "GA Prompt Expand",
+    "GAReferenceImages": "GA Reference Images",
     "GAReferenceAnalyze": "GA Reference Analyze", "GACloudGenerate": "GA Cloud Generate",
     "GACloudEdit": "GA Cloud Edit", "GARemoveBackground": "GA Remove Background",
     "GAQCScore": "GA QC Score", "GAComposeTemplate": "GA Compose Template",
@@ -29,5 +31,5 @@ NODE_DISPLAY_NAME_MAPPINGS: dict[str, str] = {
 __all__ = [
     "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS",
     "GACloudEdit", "GACloudGenerate", "GAComposeTemplate", "GAPromptExpand", "GAQCScore",
-    "GAReferenceAnalyze", "GARemoveBackground", "GASaveAsset", "GAStyleCard",
+    "GAReferenceAnalyze", "GAReferenceImages", "GARemoveBackground", "GASaveAsset", "GAStyleCard",
 ]
