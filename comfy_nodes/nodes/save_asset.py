@@ -1,8 +1,15 @@
-"""保存资产：PNG + 同名 .json 侧车文件，存到 ComfyUI 输出目录。"""
+"""保存资产：PNG + 同名 .json 侧车文件。
+
+保存位置（subfolder）有两种写法：
+- 相对路径：ComfyUI 输出目录下的子文件夹，如 ga/text_to_asset；
+- 完整路径：电脑上的任意文件夹，如 /Users/me/project/art。这时文件直接存到那里，
+  另外在 ComfyUI 的临时目录放一份只给编辑器预览用的图（ComfyUI 的预览只能显示它自己目录下的文件）。
+"""
 from __future__ import annotations
 
 import json
 import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,11 +25,41 @@ from ..tensors import tensors_to_pils
 _BAD_DRIVE = re.compile(r"^[A-Za-z]:")
 
 
+PREVIEW_SUBFOLDER = "game_art_preview"
+
+
+def _clean(sub: str) -> str:
+    return (sub or "").strip().strip("\"'").strip()
+
+
+def _absolute_dir(sub: str) -> Path | None:
+    """写的是完整路径（含 ~ 开头）时返回它，否则返回 None。"""
+    text = _clean(sub)
+    if not text:
+        return None
+    p = Path(text).expanduser()
+    if not p.is_absolute():
+        return None
+    if p.exists() and not p.is_dir():
+        raise InputError("bad_subfolder", f"保存位置不是一个文件夹：{p}")
+    return p
+
+
 def _safe_subfolder(sub: str) -> str:
-    sub = (sub or "").strip().replace("\\", "/")
+    """相对路径：只能落在输出目录里面。"""
+    sub = _clean(sub).replace("\\", "/")
     if sub.startswith("/") or _BAD_DRIVE.match(sub) or ".." in sub.split("/"):
-        raise InputError("bad_subfolder", f"子目录不合法：{sub!r}（不能是绝对路径，也不能含 ..）")
+        raise InputError("bad_subfolder", (
+            f"保存位置不合法：{sub!r}（相对路径不能含 ..；要存到输出目录以外，请写完整路径，"
+            "或者点一下 subfolder 来选文件夹）"))
     return "/".join(p for p in sub.split("/") if p not in ("", "."))
+
+
+def check_location(subfolder: str, name: str) -> None:
+    """不碰文件系统的写法检查，供运行前校验用。"""
+    if _absolute_dir(subfolder) is None:
+        _safe_subfolder(subfolder)
+    _safe_name(name)
 
 
 def _safe_name(name: str) -> str:
@@ -38,7 +75,17 @@ class GASaveAsset:
     RETURN_TYPES = ()
     RETURN_NAMES = ()
     OUTPUT_NODE = True
-    DESCRIPTION = ("保存资产：把图片存成 PNG，并在旁边存一个同名的 .json，记录这张图的提示词、模型、种子和估算费用。")
+    DESCRIPTION = ("保存资产：把图片存成 PNG，并在旁边存一个同名的 .json，记录这张图的提示词、模型、种子和估算费用。"
+                   "可以存到 ComfyUI 的输出目录，也可以直接存到电脑上的任意文件夹。")
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, subfolder: str = "", name: str = "asset") -> bool | str:
+        """点运行时、任何节点开始执行之前检查保存位置；等图出完了才发现存不了，图和钱就都白费了。"""
+        try:
+            check_location(subfolder if isinstance(subfolder, str) else "", name if isinstance(name, str) else "")
+        except InputError as e:
+            return f"「保存资产」节点：{e.message}"
+        return True
 
     @classmethod
     def INPUT_TYPES(cls) -> dict[str, Any]:
@@ -46,7 +93,10 @@ class GASaveAsset:
             "required": {
                 "image": ("IMAGE", {"tooltip": "要保存的图片。"}),
                 "subfolder": ("STRING", {"default": "game_art", "tooltip": (
-                    "存到 ComfyUI 输出目录下的哪个子文件夹，例如 ga/text_to_asset。文件夹不存在会自动创建。")}),
+                    "保存位置，文件夹不存在会自动创建。在编辑器里点一下这一栏，会弹出系统的文件夹选择窗口；"
+                    "想手动输入时按住 Shift 再点。两种写法：\n"
+                    "· 相对路径（如 ga/text_to_asset）：ComfyUI 输出目录下的子文件夹。\n"
+                    "· 完整路径（如 /Users/me/project/art）：直接存到电脑上的这个文件夹，比如游戏项目的美术目录。")}),
                 "name": ("STRING", {"default": "asset", "tooltip": (
                     "文件名前缀。实际文件名会自动加编号，如 asset_00001.png，不会覆盖已有文件。")}),
             },
@@ -69,12 +119,27 @@ class GASaveAsset:
              clean_alpha: int = 0) -> dict[str, Any]:
         import folder_paths  # ComfyUI 之外不存在，惰性导入
 
-        sub, name = _safe_subfolder(subfolder), _safe_name(name)
+        name = _safe_name(name)
         root = Path(folder_paths.get_output_directory()).resolve()
-        target_dir = (root / sub).resolve()
-        if root != target_dir and root not in target_dir.parents:
-            raise InputError("bad_subfolder", f"子目录不合法：{subfolder!r}（越出了输出目录）")
-        target_dir.mkdir(parents=True, exist_ok=True)
+        outside = _absolute_dir(subfolder)
+        if outside is not None and (outside.resolve() == root or root in outside.resolve().parents):
+            # 完整路径其实就在输出目录里：按相对路径处理，预览直接用原文件
+            subfolder, outside = outside.resolve().relative_to(root).as_posix(), None
+        if outside is None:
+            sub = _safe_subfolder(subfolder)
+            target_dir = (root / sub).resolve()
+            if root != target_dir and root not in target_dir.parents:
+                raise InputError("bad_subfolder", f"保存位置不合法：{subfolder!r}（越出了输出目录）")
+            preview_dir = None
+        else:
+            sub, target_dir = PREVIEW_SUBFOLDER, outside.resolve()
+            preview_dir = Path(folder_paths.get_temp_directory()) / PREVIEW_SUBFOLDER
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            if preview_dir is not None:
+                preview_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise InputError("bad_subfolder", f"无法创建保存位置 {target_dir}：{e}") from e
 
         # 无 mask 时也写 RGBA（alpha 全不透明），保持产物格式一致
         pils = [clean_faint_alpha(im, clean_alpha) for im in tensors_to_pils(image, mask)]
@@ -92,6 +157,12 @@ class GASaveAsset:
             side.update(file=fname, saved_at=datetime.now(UTC).isoformat())
             (target_dir / f"{name}_{counter:05d}.json").write_text(
                 json.dumps(side, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-            saved.append({"filename": fname, "subfolder": sub, "type": "output"})
+            if preview_dir is None:
+                saved.append({"filename": fname, "subfolder": sub, "type": "output"})
+            else:
+                # 文件名加随机前缀：同名图片重复生成时，编辑器不会显示成缓存里的旧图
+                shown = f"{uuid.uuid4().hex[:8]}_{fname}"
+                im.save(preview_dir / shown, format="PNG")
+                saved.append({"filename": shown, "subfolder": sub, "type": "temp"})
             counter += 1
         return {"ui": {"images": saved}}

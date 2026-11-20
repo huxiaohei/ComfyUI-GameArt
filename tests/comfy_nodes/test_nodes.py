@@ -324,6 +324,91 @@ def test_save_asset_clean_alpha(out_dir: pathlib.Path) -> None:
     assert Image.open(out_dir / "c" / "opaque_00001.png").getchannel("A").getextrema() == (255, 255)
 
 
+def test_save_asset_to_absolute_folder(out_dir: pathlib.Path, tmp_path: pathlib.Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """subfolder 写完整路径：直接存到那个文件夹；编辑器预览用临时目录里的副本。"""
+    temp = tmp_path / "temp"
+    monkeypatch.setattr(sys.modules["folder_paths"], "get_temp_directory", lambda: str(temp), raising=False)
+    dest = tmp_path / "project" / "art"  # 不存在：自动创建
+    dest.mkdir(parents=True)
+    (dest / "hero_00001.png").write_bytes(b"old")  # 已有同名文件：换下一个编号，不覆盖
+    res = nodes.GASaveAsset().save(image=torch.ones(2, 4, 4, 3), subfolder=f" '{dest}' ", name="hero",
+                                   meta={"prompt": "p"})
+    assert (dest / "hero_00001.png").read_bytes() == b"old"
+    assert sorted(f.name for f in dest.iterdir()) == [
+        "hero_00001.png", "hero_00002.json", "hero_00002.png", "hero_00003.json", "hero_00003.png"]
+    assert json.loads((dest / "hero_00002.json").read_text(encoding="utf-8"))["prompt"] == "p"
+    assert not any(out_dir.iterdir())  # 输出目录里不留副本
+    shown = res["ui"]["images"]
+    assert [i["type"] for i in shown] == ["temp", "temp"] and len({i["filename"] for i in shown}) == 2
+    for item, real in zip(shown, ("hero_00002.png", "hero_00003.png"), strict=True):
+        assert item["filename"].endswith(f"_{real}")
+        assert (temp / item["subfolder"] / item["filename"]).read_bytes() == (dest / real).read_bytes()
+    # 文件夹还不存在：自动创建
+    new_dir = tmp_path / "made" / "later"
+    nodes.GASaveAsset().save(image=torch.ones(1, 4, 4, 3), subfolder=str(new_dir), name="n")
+    assert (new_dir / "n_00001.png").is_file()
+    # 完整路径其实在输出目录里面：按相对路径处理，预览直接用原文件
+    res = nodes.GASaveAsset().save(image=torch.ones(1, 4, 4, 3), subfolder=str(out_dir / "in" / "side"), name="a")
+    assert res["ui"]["images"] == [{"filename": "a_00001.png", "subfolder": "in/side", "type": "output"}]
+    with pytest.raises(RuntimeError, match="不是一个文件夹"):
+        nodes.GASaveAsset().save(image=torch.ones(1, 4, 4, 3), subfolder=str(dest / "hero_00001.png"), name="x")
+    with pytest.raises(RuntimeError, match="无法创建保存位置"):
+        nodes.GASaveAsset().save(image=torch.ones(1, 4, 4, 3), subfolder=str(dest / "hero_00001.png" / "sub"),
+                                 name="x")
+
+
+def test_save_asset_validates_before_run(tmp_path: pathlib.Path) -> None:
+    """VALIDATE_INPUTS 在任何节点执行前调用：保存位置不对要当场拦下，不能等图出完才报错。"""
+    cls: Any = nodes.GASaveAsset
+    assert cls.VALIDATE_INPUTS(subfolder="ga/x", name="asset") is True
+    assert cls.VALIDATE_INPUTS(subfolder=str(tmp_path / "anywhere"), name="asset") is True  # 完整路径可以
+    assert cls.VALIDATE_INPUTS(subfolder="~/art") is True and cls.VALIDATE_INPUTS() is True
+    (tmp_path / "f.txt").write_text("x")
+    for kwargs, word in (({"subfolder": "a/../b"}, "保存位置"), ({"subfolder": "../x"}, "保存位置"),
+                         ({"subfolder": str(tmp_path / "f.txt")}, "不是一个文件夹"), ({"name": "a/b"}, "名称")):
+        msg = cls.VALIDATE_INPUTS(**kwargs)
+        assert isinstance(msg, str) and "保存资产" in msg and word in msg, kwargs
+
+
+def test_choose_folder_helpers() -> None:
+    from comfy_nodes import routes
+    mac = routes.choose_folder_command('选 "这个"', platform="darwin")
+    assert mac[0] == "osascript" and mac[-1] == 'POSIX path of (choose folder with prompt "选 \\"这个\\"")'
+    other = routes.choose_folder_command("选", platform="linux")
+    assert other[0] == sys.executable and other[-1] == "选" and "askdirectory" in other[2]
+    assert routes.parse_chosen_folder(0, "/Users/me/art/\n") == "/Users/me/art"
+    assert routes.parse_chosen_folder(0, "/\n") == "/"
+    assert routes.parse_chosen_folder(1, "") == "" and routes.parse_chosen_folder(0, "  \n") == ""
+    assert routes.parse_chosen_folder(1, "/tmp/x") == ""  # 退出码非 0 一律当作没选
+    # 选中的文件夹 → subfolder 的值：输出目录里面的写相对路径，外面的写完整路径
+    assert routes.as_save_location("/out/ga/icons", "/out") == "ga/icons"
+    assert routes.as_save_location("/out", "/out") == ""
+    assert routes.as_save_location("/Users/me/art", "/out") == "/Users/me/art"
+    assert routes.as_save_location("/outside", "/out") == "/outside"  # 名字相近不算在里面
+    assert routes.as_save_location("", "/out") == "" and routes.as_save_location("/x", None) == "/x"
+
+
+def test_choose_folder_runs_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from comfy_nodes import routes
+    # 用一条必定可用的命令代替系统选择窗口
+    monkeypatch.setattr(routes, "choose_folder_command",
+                        lambda prompt: [sys.executable, "-c", "print('/picked/dir/')"])
+    assert asyncio.run(routes.choose_folder()) == "/picked/dir"
+    cancel = "import sys; sys.stderr.write('User canceled. (-128)'); sys.exit(1)"  # osascript 点取消时的表现
+    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt: [sys.executable, "-c", cancel])
+    assert asyncio.run(routes.choose_folder()) == ""
+    monkeypatch.setattr(routes, "choose_folder_command",
+                        lambda prompt: [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"])
+    with pytest.raises(Exception, match="boom"):
+        asyncio.run(routes.choose_folder())
+    monkeypatch.setattr(routes, "choose_folder_command", lambda prompt: ["/no/such/program-xyz"])
+    with pytest.raises(Exception, match="无法弹出"):
+        asyncio.run(routes.choose_folder())
+
+
 def test_save_asset_fills_first_free_number(out_dir: pathlib.Path) -> None:
     (out_dir / "a_00001.png").write_bytes(b"x")
     (out_dir / "a_00003.json").write_text("{}")
@@ -331,9 +416,9 @@ def test_save_asset_fills_first_free_number(out_dir: pathlib.Path) -> None:
     assert res["ui"]["images"][0]["filename"] == "a_00002.png"
 
 
-@pytest.mark.parametrize("sub", ["../x", "a/../../b", "/abs", "a/..", "C:\\x\\..\\y"])
+@pytest.mark.parametrize("sub", ["../x", "a/../../b", "a/..", "C:\\x\\..\\y"])
 def test_save_asset_rejects_bad_subfolder(out_dir: pathlib.Path, sub: str) -> None:
-    with pytest.raises(RuntimeError, match="子目录"):
+    with pytest.raises(RuntimeError, match="保存位置"):
         nodes.GASaveAsset().save(image=torch.zeros(1, 4, 4, 3), subfolder=sub, name="a")
 
 
