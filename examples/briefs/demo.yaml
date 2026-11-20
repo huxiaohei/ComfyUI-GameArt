@@ -1,0 +1,18 @@
+# 描述清单示例：一批国潮小素材。
+# 用法：在 ComfyUI 里把这个文件拖到「提示词扩写」节点上（或把路径填进 briefs_path），
+# 然后点 item 选一项，它的描述会填进 brief。
+#
+# 字段：
+#   asset_type  可选，整份清单默认的素材种类（icon / prop / character / ui_element / background / illustration）
+#   prefix      可选，每条描述前面都加的公共文字，适合写每一项都一样的要求
+#   items       必填，每项一个 id（会用作保存的文件名）和一段 brief（大白话描述）；某一项可以单独写 asset_type
+asset_type: icon
+prefix: 主体居中，四周留出明显空白，背景是一整片干净的纯色。
+items:
+  - id: coin
+    brief: 铜钱图标，方孔圆钱，金铜色，正面视角。
+  - id: cloud
+    brief: 祥云纹样，单朵卷云，可平铺装饰。
+  - id: lantern
+    brief: 灯笼道具，红色圆灯笼，金色流苏。
+    asset_type: prop

@@ -1,13 +1,21 @@
 """提示词扩写：大白话描述 + 风格卡 → 出图用的正/反向提示词。"""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from game_art.briefs import load_briefs
+from game_art.errors import InputError
+from game_art.paths import resolve_repo_path
 from game_art.steps import ASSET_TYPES, expand_prompt, feedback_lines
 from game_art.style import StyleCard
 
 from .. import common
 from ..common import CATEGORY, META_OUT, STYLE_IN, TAG_IN, Recorder, always_changed, ga_errors, model_input, resolve_tag
+
+# 把 .yaml 拖到节点上、又拿不到完整路径时，编辑器在 briefs_path 里填 "拖入:<文件名>"（和风格卡节点同一个约定）。
+# 要和 web/prompt_expand.js 里的 DROPPED_PREFIX 保持一致。
+DROPPED_PREFIX = "拖入:"
 
 
 class GAPromptExpand:
@@ -42,6 +50,16 @@ class GAPromptExpand:
                                                "placeholder": "参考图的文字描述（可留空）", "tooltip": (
                     "对参考图的文字描述，可留空。在「参考图 → 资源」流程里由「参考图分析」节点自动填入，"
                     "让扩写出的提示词贴近参考图。")}),
+                "briefs_path": ("STRING", {"default": "", "tooltip": (
+                    "描述清单（.yaml）的路径，可留空。清单里列出一批素材，每项一个 id 和一段描述，"
+                    "填好后点下面的 item 选一项，它的描述会自动填进 brief。\n"
+                    "可以写完整路径或 @repo/...，也可以把 .yaml 文件直接拖到本节点上；"
+                    "拿不到文件完整路径时这里显示「拖入:文件名」，之后文件有改动需要重新拖一次。\n"
+                    "格式见 examples/briefs/demo.yaml。")}),
+                "item": ("STRING", {"default": "", "tooltip": (
+                    "从描述清单里选哪一项。在编辑器里点一下这一栏会列出清单里的所有项；选中后，"
+                    "这一项的描述填进 brief、素材种类填进 asset_type，「保存资产」的文件名改成这一项的 id，"
+                    "并清空上一项留下的修订意见。brief 填进来之后还可以接着改，实际出图以 brief 里的文字为准。")}),
                 "feedback": ("STRING", {"default": "", "multiline": True,
                                         "placeholder": "修订意见（一般留空，由「质检结果」节点自动填入）", "tooltip": (
                     "对上一版图片的修订意见，一行一条，留空表示第一次出图。\n"
@@ -54,14 +72,27 @@ class GAPromptExpand:
 
     @ga_errors
     def run(self, brief: str, asset_type: str, profile: str = "text", style: StyleCard | None = None,
-            ref_description: str = "", feedback: str = "", tag: str = "") -> tuple[str, str, dict[str, Any]]:
+            ref_description: str = "", briefs_path: str = "", item: str = "", feedback: str = "",
+            tag: str = "") -> tuple[str, str, dict[str, Any]]:
         tag = resolve_tag(tag)
+        item, briefs_path = item.strip(), briefs_path.strip()
+        if not brief.strip() and item and briefs_path and not briefs_path.startswith(DROPPED_PREFIX):
+            # 命令行用法：只给了清单和项的 id，没在编辑器里选过，这里直接从文件取描述
+            briefs = load_briefs(Path(resolve_repo_path(briefs_path)))
+            chosen = briefs.find(item)
+            brief = briefs.full_brief(chosen)
+            asset_type = chosen.asset_type or briefs.asset_type or asset_type
+        if not brief.strip():
+            raise InputError("no_brief", (
+                "没有描述：请在 brief 里写想要什么，或者填好描述清单（briefs_path）后点 item 选一项"))
         rec = Recorder(common.get_router())
         res = expand_prompt(rec, brief, asset_type=asset_type, style=style,
                             ref_description=ref_description, feedback=feedback, tag=tag, profile=profile)
         t = rec.target
         meta: dict[str, Any] = {"brief": brief, "prompt": res.prompt, "negative": res.negative, "tag": tag,
                 "text_model": f"{t.provider}:{t.model}" if t else None}
+        if item:
+            meta["item"] = item  # 这张图对应描述清单里的哪一项
         if feedback_lines(feedback):
             meta["feedback"] = feedback_lines(feedback)  # 这一版是带着哪些修订意见出的
         return (res.prompt, res.negative, meta)

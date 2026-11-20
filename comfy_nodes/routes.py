@@ -1,5 +1,6 @@
 """编辑器用的小接口，只在 ComfyUI 进程里注册：
 - 让「风格卡」节点能把文件内容读进编辑框；
+- 让「提示词扩写」节点能读描述清单（yaml），列出里面的每一项供选择；
 - 弹出系统自带的"选择文件夹"窗口（网页拿不到硬盘上的完整路径，只能让本机的 ComfyUI 进程代劳）。
 """
 from __future__ import annotations
@@ -10,12 +11,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from game_art.briefs import load_briefs, parse_briefs
 from game_art.errors import GAError, InputError
 from game_art.paths import resolve_repo_path
 from game_art.style import load_style_card
 
 ROUTE = "/game_art/style_card"
 CHOOSE_FOLDER_ROUTE = "/game_art/choose_folder"
+BRIEFS_ROUTE = "/game_art/briefs"
 _TK_SCRIPT = (
     "import tkinter, tkinter.filedialog as f\n"
     "r = tkinter.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
@@ -32,6 +35,19 @@ def style_card_text(path: str) -> str:
         raise InputError("bad_style_card", f"风格卡必须是 .yaml 文件：{file}")
     load_style_card(file)
     return file.read_text(encoding="utf-8")
+
+
+def briefs_items(path: str = "", text: str = "") -> dict[str, Any]:
+    """读描述清单，返回 {"items": [{"id", "brief", "asset_type"}]}，brief 已经拼上公共文字。
+    给了 text（拖进来的文件内容）就解析它，否则读 path 指向的文件。"""
+    if text.strip():
+        briefs = parse_briefs(text)
+    elif path.strip():
+        briefs = load_briefs(Path(resolve_repo_path(path.strip())))
+    else:
+        raise InputError("bad_briefs", "没有填写描述清单的文件路径")
+    return {"items": [{"id": i.id, "brief": briefs.full_brief(i), "asset_type": i.asset_type or briefs.asset_type}
+                      for i in briefs.items]}
 
 
 def choose_folder_command(prompt: str, platform: str = sys.platform) -> list[str]:
@@ -104,6 +120,18 @@ def register() -> bool:
         except GAError as e:
             return web.json_response({"error": e.message}, status=500)
 
+    async def briefs_handler(request: Any) -> Any:
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise InputError("bad_briefs", "请求内容格式不对")
+            return web.json_response(briefs_items(str(body.get("path") or ""), str(body.get("text") or "")))
+        except GAError as e:
+            return web.json_response({"error": e.message}, status=400)
+        except ValueError:
+            return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
+
     instance.routes.get(ROUTE)(handler)
+    instance.routes.post(BRIEFS_ROUTE)(briefs_handler)
     instance.routes.post(CHOOSE_FOLDER_ROUTE)(choose_folder_handler)
     return True
