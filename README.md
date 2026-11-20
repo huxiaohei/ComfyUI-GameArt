@@ -95,11 +95,18 @@
 
 **模型下拉**里有两类选项：不带冒号的（`text`、`image` 等）是配置里的"模型组"，按顺序尝试、失败自动换下一个；带冒号的（`aihubmix:gpt-4o`）是直接指定一个模型。带冒号的选项包括配置里用到的模型，以及各服务商 `/models` 接口返回的全部模型（自动获取，每小时更新）。列表不区分用途，给出图节点选了聊天模型，运行时会报错并带上服务商给出的原因。
 
-**风格卡**字段：`name`、`description`（必填），`palette`、`positive`、`negative`、`rules`（可选，留空表示不设置）。可以读文件，也可以在节点的 `edit` 框里直接写；编辑框里有内容时以它为准。示例见 `examples/style_cards/guochao.yaml`。
+**风格卡**字段：`name`、`description`（必填），`palette`、`positive`、`negative`、`rules`（可选，留空表示不设置）。可以读文件，也可以在节点的 `edit` 框里直接写；编辑框里有内容时以它为准。也可以把 `.yaml` 文件直接拖到节点上：能拿到完整路径时会填进 `path`；拿不到时（浏览器不向网页透露文件位置）会把文件内容放进编辑框，`path` 显示成"拖入:文件名"（只用来标明这张卡的来源，不再读文件），之后文件有改动需要重新拖一次。示例见 `examples/style_cards/guochao.yaml`。
 
-**参考图**节点：`paths` 一行一个图片路径，可以写多张，留空表示不用参考图。可以写完整路径、`@repo/...`，或只写 ComfyUI `input` 目录里的文件名；空行和 `#` 开头的行会被忽略。输出的 `refs` 接到「云端生图」「云端改图」「参考图分析」。「云端生图」接了参考图且里面有图时，会改走"按参考图生图"，用它的 `edit_profile` 模型组。模型分不清"参考画风"和"参考内容"，参考图里最显眼的人物、道具、姿势容易被照搬；只想统一画风时，放几张内容不同、画风相同的图，并在描述里写明哪些地方按文字重新设计。风格卡不再支持 `reference_images` 字段，旧风格卡里有这一项时会报错并提示改用本节点。
+**参考图**节点有两种给图的方式，可以混用，两边的图会合在一起发给模型：
+
+- **拖图片**：在编辑器里把一张或多张图片文件直接拖到节点上，每张图会自动生成一个「加载图像」节点（带缩略图）并连到本节点。节点上始终留一个空的图片接线口，接满一个再多出一个，最多 8 个。拖进来的图会被上传（复制）到 ComfyUI 的 `input` 目录，之后改动原文件不会跟着变。
+- **写路径**：`paths` 一行一个图片路径，可以写多张，留空表示不用。点运行时会先检查这些文件是否存在，有问题当场报错并指出是哪一个，不会等前面的节点跑完才发现。
+
+`paths` 的写法：可以写完整路径、`@repo/...`，或只写 ComfyUI `input` 目录里的文件名；空行和 `#` 开头的行会被忽略。参考图的先后顺序是 `paths` 里的在前，接线口进来的在后。输出的 `refs` 接到「云端生图」「云端改图」「参考图分析」。「云端生图」接了参考图且里面有图时，会改走"按参考图生图"，用它的 `edit_profile` 模型组。模型分不清"参考画风"和"参考内容"，参考图里最显眼的人物、道具、姿势容易被照搬；只想统一画风时，放几张内容不同、画风相同的图，并在描述里写明哪些地方按文字重新设计。风格卡不再支持 `reference_images` 字段，旧风格卡里有这一项时会报错并提示改用本节点。
 
 **清理半透明残留**：「保存资产」的 `clean_alpha`（0–255，默认 0 不清理）。大于 0 时，透明度低于这个值、又不紧贴主体的像素会被擦成全透明，用来去掉模型画在主体脚下的淡阴影和抠图留下的雾边，淡阴影一般用 64–128。只对带透明底的图有效；薄纱、烟雾、光晕这类本来就该半透明的素材保持 0。用了它时，数值会写进图片旁边的 `.json`。
+
+**保存位置**：「保存资产」的 `subfolder` 有两种写法。相对路径（如 `ga/text_to_asset`）是 ComfyUI 输出目录下的子文件夹；完整路径（如 `/Users/me/project/art`）是电脑上的任意文件夹，图片和 `.json` 直接存到那里，比如游戏项目的美术目录，这时输出目录里不留副本，编辑器里的预览用的是临时目录里的一份拷贝。在编辑器里点一下 `subfolder` 这一栏，会弹出系统自带的文件夹选择窗口；选中的文件夹在输出目录里面时自动写成相对路径，其余写完整路径。想手动输入时按住 Shift 再点，或者在右侧的属性面板里改。不支持把文件夹拖到节点上，因为网页拿不到被拖入文件夹在硬盘上的位置。保存位置或 `name` 写错时，点运行就会报错，不会等图出完才发现。`ga run` 只会把输出目录里的成品下载到 `--out`；`subfolder` 写了完整路径时，成品已经在那个文件夹里，不再下载。
 
 **资产类型**：`icon`、`prop`、`character`、`ui_element`、`background`、`illustration`。完整场景选 `background` 或 `illustration`，其余类型会要求主体居中、背景干净。
 
@@ -240,7 +247,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 | "照这几张图的画风来" | 在出图命令上加 `--set 'ref.paths=<图1>;<图2>'`（`text_to_asset`、`style_samples` 也支持） |
 | "脚下有淡阴影 / 抠图有雾边" | 加 `--set save.clean_alpha=96` |
 
-常用可调项：`expand.asset_type`、`gen.size`、`gen.n`、`gen.profile`（用哪个模型）、`ref.paths`（参考图）、`bg.method`、`save.clean_alpha`。完整场景要把 `expand.asset_type` 设为 `illustration` 或 `background`，并保持 `bg.method=none`。不确定有哪些键时用 `--dry-run` 看全貌。
+常用可调项：`expand.asset_type`、`gen.size`、`gen.n`、`gen.profile`（用哪个模型）、`ref.paths`（参考图）、`bg.method`、`save.clean_alpha`、`save.subfolder`（保存位置，可写完整路径）。完整场景要把 `expand.asset_type` 设为 `illustration` 或 `background`，并保持 `bg.method=none`。不确定有哪些键时用 `--dry-run` 看全貌。
 
 每次出图后：把图片给用户看，说明用了什么描述和风格、文件在哪、估算费用多少（来自同名 `.json` 或批次的 `cost`；是按配置单价的估算）。
 
@@ -299,7 +306,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 |---|---|---|
 | 命令行 | `src/game_art/cli/app.py` 的 `main` | 每个子命令是一个函数，真正的逻辑在其内部的 `body()` 里，外层 `_guarded()` 把错误统一转成中文提示和退出码 |
 | ComfyUI 加载节点 | `comfy_nodes/__init__.py` | `ga comfy install` 在 `custom_nodes/` 下建符号链接指向 `comfy_nodes/`；这个文件把 `src/` 加进搜索路径，并导出 `NODE_CLASS_MAPPINGS` |
-| 编辑器里的脚本 | `comfy_nodes/web/style_card.js` | 只服务风格卡节点：把文件内容读进编辑框。对应的接口在 `comfy_nodes/routes.py` |
+| 编辑器里的脚本 | `comfy_nodes/web/` | `style_card.js`：把风格卡文件内容读进编辑框，对应的接口在 `comfy_nodes/routes.py`。`reference_images.js`：把拖到参考图节点上的图片变成「加载图像」节点并连好线。`save_asset.js`：点 `subfolder` 时调用 `routes.py` 里弹系统选择窗口的接口 |
 
 **一次 `ga run` 走过的路**（`cli/app.py` 的 `run`）
 
