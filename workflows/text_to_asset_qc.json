@@ -1,0 +1,160 @@
+{
+  "style": {
+    "class_type": "GAStyleCard",
+    "inputs": {
+      "path": "@repo/examples/style_cards/guochao.yaml"
+    },
+    "_meta": {
+      "title": "风格卡"
+    }
+  },
+  "ref": {
+    "class_type": "GAReferenceImages",
+    "inputs": {
+      "paths": ""
+    },
+    "_meta": {
+      "title": "参考图"
+    }
+  },
+  "expand": {
+    "class_type": "GAPromptExpand",
+    "inputs": {
+      "brief": "",
+      "asset_type": "icon",
+      "profile": "text",
+      "style": [
+        "style",
+        0
+      ],
+      "feedback": "",
+      "tag": ""
+    },
+    "_meta": {
+      "title": "提示词扩写"
+    }
+  },
+  "gen": {
+    "class_type": "GACloudGenerate",
+    "inputs": {
+      "prompt": [
+        "expand",
+        0
+      ],
+      "negative": [
+        "expand",
+        1
+      ],
+      "size": "1024x1024",
+      "n": 1,
+      "transparent": true,
+      "seed": -1,
+      "profile": "image",
+      "refs": [
+        "ref",
+        0
+      ],
+      "meta": [
+        "expand",
+        2
+      ],
+      "tag": "",
+      "edit_profile": "image_edit"
+    },
+    "_meta": {
+      "title": "云端生图"
+    }
+  },
+  "qc": {
+    "class_type": "GAQCReview",
+    "inputs": {
+      "image": [
+        "gen",
+        0
+      ],
+      "threshold": 7.0,
+      "profile": "vision",
+      "mask": [
+        "gen",
+        1
+      ],
+      "meta": [
+        "gen",
+        2
+      ],
+      "style": [
+        "style",
+        0
+      ],
+      "brief": "",
+      "tag": ""
+    },
+    "_meta": {
+      "title": "质检结果"
+    }
+  },
+  "bg": {
+    "class_type": "GARemoveBackground",
+    "inputs": {
+      "image": [
+        "qc",
+        0
+      ],
+      "method": "none",
+      "mask": [
+        "qc",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "去背景"
+    }
+  },
+  "save": {
+    "class_type": "GASaveAsset",
+    "inputs": {
+      "image": [
+        "bg",
+        0
+      ],
+      "subfolder": "ga/text_to_asset_qc",
+      "name": "asset",
+      "mask": [
+        "bg",
+        1
+      ],
+      "meta": [
+        "qc",
+        2
+      ],
+      "clean_alpha": 0
+    },
+    "_meta": {
+      "title": "保存资产"
+    }
+  },
+  "show_prompt": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "expand",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "查看正向提示词"
+    }
+  },
+  "show_negative": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "expand",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "查看反向提示词"
+    }
+  }
+}

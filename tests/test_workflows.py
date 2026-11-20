@@ -11,7 +11,7 @@ from game_art.comfy.workflow import apply_sets, load_workflow
 from game_art.paths import REPO_ROOT, resolve_repo_path
 
 WF_DIR = REPO_ROOT / "workflows"
-NAMES = ["text_to_asset", "ref_to_asset", "style_samples", "compose_template"]
+NAMES = ["text_to_asset", "text_to_asset_qc", "ref_to_asset", "style_samples", "compose_template"]
 WORKFLOW_FILES = [WF_DIR / f"{n}.json" for n in NAMES]
 BUILTINS: dict[str, Any] = {
     "LoadImage": {"required": {"image": ("STRING",)}, "returns": ("IMAGE", "MASK")},
@@ -88,6 +88,14 @@ def test_expected_structure() -> None:
     # 扩写出的提示词在画布上看得见
     assert t["show_prompt"]["inputs"]["source"] == ["expand", 0]
     assert t["show_negative"]["inputs"]["source"] == ["expand", 1]
+    # 带质检的版本：质检结果放在生成和去背景之间，图片、蒙版、记录都经过它
+    q = load_workflow(WF_DIR / "text_to_asset_qc.json")
+    assert q["qc"]["class_type"] == "GAQCReview" and q["qc"]["inputs"]["image"] == ["gen", 0]
+    assert q["qc"]["inputs"]["mask"] == ["gen", 1] and q["qc"]["inputs"]["meta"] == ["gen", 2]
+    assert q["qc"]["inputs"]["style"] == ["style", 0] and q["qc"]["inputs"]["brief"] == ""
+    assert q["bg"]["inputs"]["image"] == ["qc", 0] and q["bg"]["inputs"]["mask"] == ["qc", 1]
+    assert q["save"]["inputs"]["meta"] == ["qc", 2] and q["expand"]["inputs"]["feedback"] == ""
+    assert list(q).index("gen") < list(q).index("qc") < list(q).index("bg")
     r = load_workflow(WF_DIR / "ref_to_asset.json")
     assert r["ref"]["class_type"] == "GAReferenceImages" and r["ref"]["inputs"]["paths"] == ""
     assert r["expand"]["inputs"]["ref_description"] == ["analyze", 0]

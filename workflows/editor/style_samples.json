@@ -152,7 +152,7 @@
       ],
       "size": [
         340,
-        384
+        494
       ],
       "flags": {},
       "order": 2,
@@ -193,6 +193,14 @@
           "link": null,
           "widget": {
             "name": "ref_description"
+          }
+        },
+        {
+          "name": "feedback",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "feedback"
           }
         },
         {
@@ -237,6 +245,7 @@
         "",
         "icon",
         "text",
+        "",
         "",
         ""
       ]

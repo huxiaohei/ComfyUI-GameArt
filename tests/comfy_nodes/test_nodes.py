@@ -19,7 +19,7 @@ from game_art.style import StyleCard
 from tests.conftest import write_cfg
 
 ALL = {"GAStyleCard", "GAReferenceImages", "GAPromptExpand", "GAReferenceAnalyze", "GACloudGenerate", "GACloudEdit",
-       "GARemoveBackground", "GAQCScore", "GAComposeTemplate", "GASaveAsset"}
+       "GARemoveBackground", "GAQCScore", "GAQCReview", "GAComposeTemplate", "GASaveAsset"}
 
 
 class FakeLedger:
@@ -254,8 +254,110 @@ def test_reference_analyze_and_qc(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match="至少需要一张图片"):
         nodes.GAReferenceAnalyze().run()
     r.text = '{"score":4,"issues":["糊"]}'
-    score, report = nodes.GAQCScore().run(image=torch.zeros(1, 8, 8, 3), brief="龙", threshold=6)
+    score, report = nodes.GAQCScore().run(image=torch.zeros(1, 8, 8, 3), brief="龙")
     assert score == 4.0 and "糊" in report and "未通过" in report
+
+
+class SeqRouter(FakeRouter):
+    """按顺序返回预设的回答（最后一个重复用）。"""
+    def __init__(self, *texts: str) -> None:
+        super().__init__()
+        self.texts = list(texts)
+
+    def chat(self, profile: str, messages: list[Message], *, tag: str,
+             json_mode: bool = False) -> tuple[ChatResult, Target]:
+        self.text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
+        return super().chat(profile, messages, tag=tag, json_mode=json_mode)
+
+
+@pytest.fixture
+def temp_dir(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    d = tmp_path / "temp"
+    fp = types.ModuleType("folder_paths")
+    monkeypatch.setattr(fp, "get_temp_directory", lambda: str(d), raising=False)
+    monkeypatch.setitem(sys.modules, "folder_paths", fp)
+    return d
+
+
+def test_prompt_expand_feedback(monkeypatch: pytest.MonkeyPatch) -> None:
+    r = FakeRouter()
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    spec = nodes.GAPromptExpand.INPUT_TYPES()["optional"]["feedback"]
+    assert spec[0] == "STRING" and spec[1]["multiline"] and spec[1]["default"] == ""
+    *_, meta = nodes.GAPromptExpand().run(brief="貂蝉", asset_type="character", feedback="- 头顶贴边\n\n步摇不精致")
+    assert meta["feedback"] == ["头顶贴边", "步摇不精致"]
+    assert "1. 头顶贴边" in r.calls[0][2][0].text
+    *_, meta = nodes.GAPromptExpand().run(brief="貂蝉", asset_type="character", feedback=" \n")
+    assert "feedback" not in meta  # 没有修订意见时不往记录里写
+
+
+def test_qc_review_single_image(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    r = SeqRouter('{"score":6,"issues":[{"text":"头顶贴边","level":"must"},{"text":"袖口再细些","level":"suggest"}]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    image, mask = torch.rand(1, 8, 6, 3), torch.zeros(1, 8, 6)
+    out = nodes.GAQCReview().run(image=image, mask=mask, meta={"brief": "貂蝉", "tag": "b/1", "prompt": "p"})
+    got_image, got_mask, meta, report = out["result"]
+    assert got_image is image and got_mask is mask  # 图片原样往下传
+    assert meta["prompt"] == "p" and meta["qc"][0]["score"] == 6
+    assert meta["qc"][0]["issues"] == ["头顶贴边", "袖口再细些"]
+    assert "未通过" in report and "[必须改] 头顶贴边" in report and "[建议] 袖口再细些" in report
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["threshold"] == 7.0 and ui["common"] == [] and len(ui["results"]) == 1
+    res = ui["results"][0]
+    assert res["passed"] is False and res["issues"] == [{"text": "头顶贴边", "level": "must"},
+                                                        {"text": "袖口再细些", "level": "suggest"}]
+    thumb = res["thumb"]
+    assert thumb["type"] == "temp" and (temp_dir / thumb["subfolder"] / thumb["filename"]).is_file()
+    # 只有一张图：不调用归并；描述取自 meta，记账标签沿用 meta 里的
+    assert [(c[0], c[1], c[3]) for c in r.calls] == [("chat", "vision", "b/1")]
+    assert "貂蝉" in r.calls[0][2][0].text
+
+
+def test_qc_review_batch_finds_common_issues(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    r = SeqRouter('{"score":8,"issues":["脚下没留白"]}', '{"score":5,"issues":["脚贴底边","步摇糊"]}',
+                  '{"score":9,"issues":[]}', '{"common":[{"text":"脚下留白不足","images":[1,2]}]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    out = nodes.GAQCReview().run(image=torch.rand(3, 8, 8, 3), brief="自己写的描述", threshold=6.0,
+                                 meta={"brief": "meta 里的描述"})
+    _image, mask, meta, report = out["result"]
+    assert mask.shape == (3, 8, 8) and mask.sum().item() == 0  # 没接 mask：全不透明
+    (ui,) = out["ui"]["ga_qc"]
+    assert [x["score"] for x in ui["results"]] == [8, 5, 9]
+    assert [x["passed"] for x in ui["results"]] == [True, False, True]
+    assert ui["common"] == [{"text": "脚下留白不足", "count": 2}] and ui["note"] == ""
+    assert "共性问题" in report and "脚下留白不足（2/3 张）" in report
+    assert len({x["thumb"]["filename"] for x in ui["results"]}) == 3
+    # brief 写了就用它；三次看图 + 一次归并
+    assert [c[1] for c in r.calls] == ["vision", "vision", "vision", "text"]
+    assert "自己写的描述" in r.calls[0][2][0].text and "meta 里的描述" not in r.calls[0][2][0].text
+    assert len(meta["qc"]) == 3
+
+
+def test_qc_review_survives_failed_merge(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    """归并共性问题失败不该让整个节点失败：每张图自己的结果照常给出，并在报告里说明。"""
+    r = SeqRouter('{"score":5,"issues":["糊"]}', '{"score":5,"issues":["糊"]}', "不是 JSON")
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    out = nodes.GAQCReview().run(image=torch.rand(2, 8, 8, 3), brief="龙")
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["common"] == [] and "没能归并出共性问题" in ui["note"] and "没能归并出共性问题" in out["result"][3]
+    assert len(ui["results"]) == 2
+
+
+def test_qc_review_needs_brief(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    monkeypatch.setattr(common, "get_router", FakeRouter)
+    with pytest.raises(RuntimeError, match="原本想要什么"):
+        nodes.GAQCReview().run(image=torch.rand(1, 8, 8, 3), meta={"prompt": "p"})
+
+
+def test_save_asset_splits_qc_per_image(out_dir: pathlib.Path) -> None:
+    """「质检结果」给的是整批的质检列表，每张图旁边的记录里只留它自己那一条。"""
+    meta = {"prompt": "p", "qc": [{"score": 8}, {"score": 5}]}
+    nodes.GASaveAsset().save(image=torch.zeros(2, 4, 4, 3), subfolder="q", name="a", meta=meta)
+    got = [json.loads((out_dir / "q" / f"a_0000{i}.json").read_text())["qc"] for i in (1, 2)]
+    assert got == [{"score": 8}, {"score": 5}]
+    # 张数对不上（比如中间换过图）：不猜，原样保留
+    nodes.GASaveAsset().save(image=torch.zeros(1, 4, 4, 3), subfolder="q", name="b", meta=meta)
+    assert json.loads((out_dir / "q" / "b_00001.json").read_text())["qc"] == meta["qc"]
 
 
 def test_remove_background_none() -> None:

@@ -145,13 +145,18 @@ class GASaveAsset:
         pils = [clean_faint_alpha(im, clean_alpha) for im in tensors_to_pils(image, mask)]
         saved: list[dict[str, str]] = []
         counter = 1
-        for im in pils:
+        # 上游「质检结果」给的是整批的质检列表：每张图的记录里只留它自己那一条
+        qc_list = (meta or {}).get("qc")
+        per_image_qc = qc_list if isinstance(qc_list, list) and len(qc_list) == len(pils) else None
+        for index, im in enumerate(pils):
             while (target_dir / f"{name}_{counter:05d}.png").exists() or \
                     (target_dir / f"{name}_{counter:05d}.json").exists():
                 counter += 1
             fname = f"{name}_{counter:05d}.png"
             im.save(target_dir / fname, format="PNG")
             side = dict(meta or {})
+            if per_image_qc is not None:
+                side["qc"] = per_image_qc[index]
             if clean_alpha > 0:
                 side["clean_alpha"] = clean_alpha
             side.update(file=fname, saved_at=datetime.now(UTC).isoformat())

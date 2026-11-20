@@ -168,6 +168,14 @@
           "name": "meta",
           "type": "GA_META",
           "link": null
+        },
+        {
+          "name": "clean_alpha",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "clean_alpha"
+          }
         }
       ],
       "outputs": [],
@@ -177,7 +185,8 @@
       },
       "widgets_values": [
         "ga/compose_template",
-        "asset"
+        "asset",
+        0
       ]
     }
   ],

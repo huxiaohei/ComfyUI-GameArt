@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from game_art.steps import ASSET_TYPES, expand_prompt
+from game_art.steps import ASSET_TYPES, expand_prompt, feedback_lines
 from game_art.style import StyleCard
 
 from .. import common
@@ -42,18 +42,26 @@ class GAPromptExpand:
                                                "placeholder": "参考图的文字描述（可留空）", "tooltip": (
                     "对参考图的文字描述，可留空。在「参考图 → 资源」流程里由「参考图分析」节点自动填入，"
                     "让扩写出的提示词贴近参考图。")}),
+                "feedback": ("STRING", {"default": "", "multiline": True,
+                                        "placeholder": "修订意见（一般留空，由「质检结果」节点自动填入）", "tooltip": (
+                    "对上一版图片的修订意见，一行一条，留空表示第一次出图。\n"
+                    "在「质检结果」节点上勾选问题、点「采纳并重新生成」，勾选的问题会自动追加到这里；"
+                    "也可以自己手写。扩写时模型会把每一条改写成正面的画面描述并入提示词。\n"
+                    "换了一个素材、或者想从头再来时，把这里清空（「质检结果」节点上有「清空修订意见」按钮）。")}),
                 "tag": TAG_IN,
             },
         }
 
     @ga_errors
     def run(self, brief: str, asset_type: str, profile: str = "text", style: StyleCard | None = None,
-            ref_description: str = "", tag: str = "") -> tuple[str, str, dict[str, Any]]:
+            ref_description: str = "", feedback: str = "", tag: str = "") -> tuple[str, str, dict[str, Any]]:
         tag = resolve_tag(tag)
         rec = Recorder(common.get_router())
         res = expand_prompt(rec, brief, asset_type=asset_type, style=style,
-                            ref_description=ref_description, tag=tag, profile=profile)
+                            ref_description=ref_description, feedback=feedback, tag=tag, profile=profile)
         t = rec.target
-        meta = {"brief": brief, "prompt": res.prompt, "negative": res.negative, "tag": tag,
+        meta: dict[str, Any] = {"brief": brief, "prompt": res.prompt, "negative": res.negative, "tag": tag,
                 "text_model": f"{t.provider}:{t.model}" if t else None}
+        if feedback_lines(feedback):
+            meta["feedback"] = feedback_lines(feedback)  # 这一版是带着哪些修订意见出的
         return (res.prompt, res.negative, meta)
