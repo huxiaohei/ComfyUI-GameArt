@@ -12,11 +12,14 @@ from game_art.imaging import (
     clean_faint_alpha,
     contact_sheet,
     fit_canvas,
+    fit_subject,
     flatten_for_review,
     from_bytes,
     has_transparency,
     make_seamless,
     remove_background,
+    subject_box,
+    subject_ratio,
     tile_preview,
     to_data_url,
     to_png_bytes,
@@ -179,3 +182,42 @@ def test_tile_preview_repeats() -> None:
     out = tile_preview(src, 2)
     assert out.size == (20, 12)
     assert out.getpixel((13, 8)) == src.getpixel((3, 2))
+
+
+def _figure(canvas: tuple[int, int], box: tuple[int, int, int, int]) -> Image.Image:
+    img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    img.paste((200, 60, 60, 255), box)
+    return img
+
+
+def test_subject_ratio_measures_by_alpha_and_ignores_faint_pixels() -> None:
+    img = _figure((100, 200), (40, 50, 60, 150))  # 主体高 100，占一半
+    img.paste((0, 0, 0, 40), (0, 190, 100, 200))  # 脚下一条很淡的影子，不算主体
+    assert subject_box(img) == (40, 50, 60, 150)
+    assert subject_ratio(img) == pytest.approx(0.5)
+
+
+def test_subject_ratio_none_for_opaque_or_empty() -> None:
+    assert subject_ratio(Image.new("RGB", (10, 10), "red")) is None
+    assert subject_ratio(Image.new("RGBA", (10, 10), (0, 0, 0, 0))) is None
+
+
+@pytest.mark.parametrize("box", [(40, 80, 60, 120), (30, 5, 70, 195)], ids=["放大", "缩小"])
+def test_fit_subject_scales_to_ratio_and_centers(box: tuple[int, int, int, int]) -> None:
+    out = fit_subject(_figure((100, 200), box), 0.7)
+    assert out.size == (100, 200) and out.mode == "RGBA"
+    assert subject_ratio(out) == pytest.approx(0.7, abs=0.02)
+    left, top, right, bottom = subject_box(out) or (0, 0, 0, 0)
+    assert abs(left - (100 - right)) <= 2 and abs(top - (200 - bottom)) <= 2  # 上下、左右都居中
+
+
+def test_fit_subject_wide_subject_limited_by_width() -> None:
+    out = fit_subject(_figure((100, 100), (10, 45, 90, 55)), 0.7)  # 很宽很扁：按高度放大会冲出左右
+    left, _top, right, _bottom = subject_box(out) or (0, 0, 0, 0)
+    assert (right - left) / 100 == pytest.approx(0.9, abs=0.03)
+
+
+def test_fit_subject_rejects_opaque() -> None:
+    with pytest.raises(InputError) as e:
+        fit_subject(Image.new("RGB", (10, 10), "red"))
+    assert e.value.code == "no_subject"

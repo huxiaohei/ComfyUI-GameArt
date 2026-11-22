@@ -103,6 +103,49 @@ def fit_canvas(img: Image.Image, size: tuple[int, int], align: str = "center") -
     return canvas
 
 
+# 量主体时，透明度低于这个值的像素不算主体（脚下的淡影、抠图留下的雾边）；和保存时清理残留的常用值一致
+SUBJECT_ALPHA = 96
+DEFAULT_SUBJECT_RATIO = 0.7
+SUBJECT_TOLERANCE = 0.03
+
+
+def subject_box(img: Image.Image, threshold: int = SUBJECT_ALPHA) -> tuple[int, int, int, int] | None:
+    """主体在画面里占的矩形范围（左、上、右、下），按不透明的像素量。
+    不带透明底的图量不出主体在哪，返回 None；整张都是透明的也返回 None。"""
+    if not has_transparency(img):
+        return None
+    solid = img.convert("RGBA").getchannel("A").point(lambda a: 255 if a >= threshold else 0)
+    return solid.getbbox()
+
+
+def subject_ratio(img: Image.Image) -> float | None:
+    """主体的高度占画面高度的几成（0 到 1）。量不出来时返回 None。"""
+    box = subject_box(img)
+    return None if box is None else (box[3] - box[1]) / img.height
+
+
+def fit_subject(img: Image.Image, ratio: float = DEFAULT_SUBJECT_RATIO, max_width: float = 0.9) -> Image.Image:
+    """把主体等比例缩放到占画面高度的 ratio，并放到画面正中；画布尺寸不变。
+    主体很宽时以宽度不超过画面的 max_width 为准，不让它贴到左右两边。
+    纯本机处理，不调模型。放大超过三成左右线条会发虚，那种情况应该重新出图。
+    不带透明底的图量不出主体，报错。"""
+    box = subject_box(img)
+    if box is None:
+        raise InputError("no_subject", "这张图没有透明底，量不出主体在哪，不能调整主体大小")
+    rgba = img.convert("RGBA")
+    # 往外多留两个像素，把主体边缘半透明的抗锯齿像素一起带上
+    left, top = max(0, box[0] - 2), max(0, box[1] - 2)
+    right, bottom = min(rgba.width, box[2] + 2), min(rgba.height, box[3] + 2)
+    part = rgba.crop((left, top, right, bottom))
+    scale = min(ratio * rgba.height / (box[3] - box[1]), max_width * rgba.width / (box[2] - box[0]))
+    nw, nh = max(1, round(part.width * scale)), max(1, round(part.height * scale))
+    if (nw, nh) != part.size:
+        part = part.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", rgba.size, (0, 0, 0, 0))
+    canvas.paste(part, ((rgba.width - nw) // 2, (rgba.height - nh) // 2))
+    return canvas
+
+
 def _checkerboard(w: int, h: int, tile: int = 16) -> Image.Image:
     bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
     d = ImageDraw.Draw(bg)

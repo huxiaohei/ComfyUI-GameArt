@@ -162,6 +162,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 - **省钱的三个开关**（2026-11 按账本实测加的：带参考图出一张图，输入约占费用的两到三成；质检每次约 1 美分）：
   - 参考图缩小：`GAReferenceImages` 的 `shrink` / `shrink_size`，在节点里用 `imaging.shrink_to` 缩到长边 512 再输出，下游拿到的就是小图。「修这张」的底图取自质检节点自己存的原图，不受影响。
   - 扩写复用：`GAPromptExpand` 的 `reuse`。`steps.expand_key` 把描述、素材种类、风格卡内容、参考图描述、整理后的修订意见、模型组算成指纹，命中时直接返回 `<data_dir>/expand_cache.json` 里存的提示词（最多 300 条）。关着 `reuse` 时仍会写入，所以重新打开后沿用的是最近一版。
+  - 主体大小由程序管，不问模型：`imaging.subject_ratio` 按透明度（不低于 `SUBJECT_ALPHA`）量主体的高度占比，随质检结果一起发给页面（`subject`，不透明的图是 `null`）；`prompts/qc.md` 里明确要求模型不评价主体大小，因为它估不准。「调整大小」把 `{"file", "resize": true}` 写进 `fix` 再排队，节点调 `imaging.fit_subject`（裁出主体、等比例缩放、居中贴回原尺寸画布），不调任何模型，`ui` 的 `mode` 是 `fix` 并带 `resized: true`，页面脚本的 `appendFix` 把原来那张的得分和问题沿用过来。命令行的 `ga fit` 用的是同一个函数。占比是按整个不透明范围量的，举着长兵器的角色身体会比空手的略小，这是已知的局限。
   - 质检按需：`GAQCReview` 的 `auto_qc`。关掉后结果里 `score` 是 `null`；「质检这张」把 `{"file", "qc": true}` 写进 `fix` 再排队，节点只给那一张调 `qc_score`，输出用 `ExecutionBlocker` 拦住下游（否则保存节点会把同一张图再存一遍），`ui` 的 `mode` 是 `qc`，页面脚本用 `applyQC` 把分数填回原来那一条。
 - **描述清单**：网页没有 yaml 解析器，也拿不到拖入文件的路径，所以清单交给后台的 `/game_art/briefs` 解析。选中一项后脚本把描述写进 `brief` 控件，后台运行时只认 `brief`；`brief` 为空且给了 `item` 时才自己读文件（命令行用法）。
 - **拖入的文件**：拿不到完整路径时，控件里写 `拖入:<文件名>`（Python 和 JS 两边的 `DROPPED_PREFIX` 要一致），内容存在编辑框或 `node.properties` 里。

@@ -1,4 +1,4 @@
-"""ga 命令行入口：config check / comfy install / comfy wait / run / batch。
+"""ga 命令行入口：config check / comfy install / comfy wait / run / fit / batch。
 
 约定：stdout 只放结果（--json 时恰好一个 JSON 对象），进度与错误说明走 stderr；
 退出码见全局约束（0/2/3/4/5/6/9/130）。
@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -14,7 +15,9 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 import typer
+from PIL import Image
 
+from game_art import imaging
 from game_art.comfy.client import ComfyClient
 from game_art.comfy.editor import to_editor_graph
 from game_art.comfy.workflow import apply_sets, find_uploads, load_workflow
@@ -315,6 +318,87 @@ def run(
             raise
         written = client.download_outputs(entry, out or _default_out(run_tag))
         _report_outputs(prompt_id, written, as_json)
+
+    _guarded(as_json, body)
+
+
+# ---------------------------------------------------------------- fit
+FIT_BACKUP = "_fit_backup"
+
+
+def _fit_targets(paths: list[Path]) -> list[Path]:
+    """文件照原样收下；文件夹取里面的 PNG（不往子文件夹里找）。"""
+    out: list[Path] = []
+    for p in paths:
+        if p.is_dir():
+            out += sorted(f for f in p.iterdir() if f.suffix.lower() == ".png" and f.is_file())
+        elif p.is_file():
+            out.append(p)
+        else:
+            raise InputError("not_found", f"找不到：{p}")
+    return out
+
+
+def fit_file(path: Path, ratio: float, tolerance: float, backup: bool, dry_run: bool) -> dict[str, Any]:
+    """量一张图的主体占比，超出允许范围就在原位置改掉它。返回这张图的处理结果。"""
+    with Image.open(path) as opened:
+        img = opened.copy()
+    before = imaging.subject_ratio(img)
+    row: dict[str, Any] = {"file": str(path), "before": before, "after": before, "action": "skip"}
+    if before is None:
+        row["reason"] = "没有透明底，量不出主体"
+        return row
+    if abs(before - ratio) <= tolerance:
+        row["reason"] = "已经合适"
+        return row
+    fitted = imaging.fit_subject(img, ratio)
+    row.update(after=imaging.subject_ratio(fitted), action="would_fit" if dry_run else "fit")
+    if dry_run:
+        return row
+    record = path.with_suffix(".json")
+    if backup:
+        keep = path.parent / FIT_BACKUP
+        keep.mkdir(exist_ok=True)
+        for f in (path, record):
+            if f.is_file() and not (keep / f.name).exists():  # 已经有备份（之前调过一次）：留着最早的那份
+                shutil.copy2(f, keep / f.name)
+    fitted.save(path, format="PNG")
+    if record.is_file():
+        try:
+            meta = json.loads(record.read_text(encoding="utf-8"))
+        except ValueError:
+            meta = None
+        if isinstance(meta, dict):
+            meta["resize"] = {"from": round(before, 3), "to": round(row["after"] or 0, 3)}
+            record.write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return row
+
+
+@app.command("fit")
+def fit(
+    paths: list[Path] = typer.Argument(..., help="PNG 文件或文件夹，可以写多个；文件夹只处理里面的 PNG"),
+    ratio: float = typer.Option(imaging.DEFAULT_SUBJECT_RATIO, "--ratio", min=0.3, max=0.95,
+                                help="主体应该占画面高度的几成"),
+    tolerance: float = typer.Option(imaging.SUBJECT_TOLERANCE, "--tolerance", min=0.0, max=0.3,
+                                    help="离目标差多少以内不动（缩放会损失一点清晰度，差得不多就不值得改）"),
+    backup: bool = typer.Option(True, "--backup/--no-backup",
+                                help=f"改之前把原图和记录复制到同目录的 {FIT_BACKUP}/"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只量、只列出会改哪些，不动文件"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """统一主体大小：把透明底图片的主体等比例缩放到占画面高度的 ratio 并居中。本机处理，不调模型、不花钱。"""
+    def body() -> None:
+        rows = [fit_file(p, ratio, tolerance, backup, dry_run) for p in _fit_targets(paths)]
+        if as_json:
+            _emit_json({"ratio": ratio, "tolerance": tolerance, "dry_run": dry_run, "files": rows})
+            return
+        pct: Callable[[Any], str] = lambda v: "  —" if v is None else f"{v:4.0%}"  # noqa: E731
+        for r in rows:
+            done = {"fit": "已调整", "would_fit": "会调整", "skip": "不动"}[r["action"]]
+            typer.echo(f"{pct(r['before'])} → {pct(r['after'])}  {done}  {r['file']}"
+                       + (f"（{r['reason']}）" if r.get("reason") else ""))
+        changed = sum(r["action"] != "skip" for r in rows)
+        _err(f"共 {len(rows)} 张，{'会调整' if dry_run else '调整了'} {changed} 张，目标 {ratio:.0%} ± {tolerance:.0%}")
 
     _guarded(as_json, body)
 

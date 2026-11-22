@@ -6,6 +6,8 @@
   这一次本节点不向上游要图（image / mask / meta 是按需读取的输入），上游不执行、不花出图的钱，
   而是取出上次存下的那张原图，让看图模型对着它写一段完整的修改指令（保持什么、改什么，末尾拼上风格卡），
   再把原图（排第一）和标准风格图（refs，只管画风）一起交给改图模型，最后对结果质检。
+- 「调整大小」：主体在画面里占几成是程序按透明度量出来的（不问模型）。点了以后同样走 fix，
+  在本机把选中那张图的主体等比例缩放到目标占比并居中，不调任何模型、不花钱。
 
 问题不通过连线回传（ComfyUI 的图不能成环），由页面脚本直接改节点上的输入框。
 """
@@ -16,11 +18,12 @@ import json
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from PIL import Image
 
+from game_art import imaging
 from game_art.errors import GAError, InputError, UpstreamError
 from game_art.providers.base import ImageRequest
 from game_art.steps import (
@@ -96,22 +99,29 @@ def _load_stored(name: str) -> tuple[Image.Image, dict[str, Any]]:
     return base, meta if isinstance(meta, dict) else {}
 
 
-def parse_fix(fix: str) -> tuple[str, list[str], bool] | None:
-    """fix 是页面脚本写进来的 JSON，空 = 正常运行。两种写法：
+class FixJob(NamedTuple):
+    file: str  # 要处理的那张图在临时目录里的名字
+    notes: list[str]  # 修改意见
+    only_qc: bool  # 只补一次质检
+    resize: bool = False  # 只在本机调整主体大小
+
+
+def parse_fix(fix: str) -> FixJob | None:
+    """fix 是页面脚本写进来的 JSON，空 = 正常运行。三种写法：
     {"file": 要修的那张图, "notes": [修改意见]} = 在这张图上修改；
-    {"file": 那张图, "qc": true} = 只给这张图补一次质检（平时关着自动质检时用）。
-    返回 (图片名, 修改意见, 是否只质检)。"""
+    {"file": 那张图, "qc": true} = 只给这张图补一次质检（平时关着自动质检时用）；
+    {"file": 那张图, "resize": true} = 在本机把这张图的主体缩放到目标占比，不调模型。"""
     if not (fix or "").strip():
         return None
     try:
         obj = json.loads(fix)
-        file, only_qc = obj["file"], obj.get("qc") is True
-        notes = obj.get("notes", []) if only_qc else obj["notes"]
+        file, only_qc, resize = obj["file"], obj.get("qc") is True, obj.get("resize") is True
+        notes = obj.get("notes", []) if only_qc or resize else obj["notes"]
         if not isinstance(file, str) or not isinstance(notes, list) or not all(isinstance(n, str) for n in notes):
             raise ValueError("字段类型不对")
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise InputError("bad_fix", f"fix 的内容不对（它由节点上的按钮自动填写，平时应该留空）：{e}") from e
-    return file, [n.strip() for n in notes if n.strip()], only_qc
+    return FixJob(file, [n.strip() for n in notes if n.strip()], only_qc, resize)
 
 
 def _blocked() -> Any:
@@ -207,6 +217,11 @@ class GAQCReview:
                     "关闭：不自动质检，节省看图模型的费用，适合一次出好几张先挑一挑的阶段。"
                     "图片照常显示和保存；想看哪一张的问题，选中它再点「质检这张」，只给这一张质检。"
                     "没质检的图也可以直接「修这张」，把要改的地方写在「我的补充」里即可。")}),
+                "subject_ratio": ("FLOAT", {"default": imaging.DEFAULT_SUBJECT_RATIO, "min": 0.3, "max": 0.95,
+                                            "step": 0.05, "tooltip": (
+                    "主体应该占画面高度的几成，默认 0.7。节点上会显示每张图实测的占比（按透明度量，不问模型）；"
+                    "点「调整大小」时，在本机把选中那张图的主体等比例缩放到这个占比并居中，不花钱。"
+                    "只对带透明底的图有效。放大超过三成左右线条会发虚，那种情况重新生成更好。")}),
             },
         }
 
@@ -223,12 +238,28 @@ class GAQCReview:
             style: StyleCard | None = None, brief: str = "", edit_profile: str = "image_edit", fix: str = "",
             tag: str = "", refs: list[Image.Image] | None = None, fix_with_refs: bool = True,
             fix_quality: str = "high", fix_fidelity: str = "high", edit_model: str = "",
-            auto_qc: bool = True) -> dict[str, Any]:
+            auto_qc: bool = True, subject_ratio: float = imaging.DEFAULT_SUBJECT_RATIO) -> dict[str, Any]:
         job = parse_fix(fix)
         router = common.get_router()
         fixed_from = ""
         used_model = ""
-        if job is not None and job[2]:
+        if job is not None and job.resize:
+            # 只在本机调整主体大小：不出图、不调模型。新的一张照常往下游送（去背景、保存）
+            base, stored = _load_stored(job.file)
+            before = imaging.subject_ratio(base)
+            fitted = imaging.fit_subject(base, subject_ratio)
+            after = imaging.subject_ratio(fitted)
+            out_image, out_mask = pil_to_tensors([fitted])
+            out_meta = dict(stored)
+            out_meta.pop("qc", None)
+            out_meta["resize"] = {"from": round(before or 0, 3), "to": round(after or 0, 3)}
+            files = _store([fitted], out_meta)
+            note = f"主体占画面高度从 {before:.0%} 调到了 {after:.0%}（本机处理，没有调用模型）"
+            ui = {"threshold": threshold, "note": "", "mode": "fix", "base": job.file, "model": "", "common": [],
+                  "resized": True, "target": subject_ratio,
+                  "results": [{"score": None, "passed": None, **files[0], "subject": after, "issues": []}]}
+            return {"ui": {"ga_qc": [ui]}, "result": (out_image, out_mask, out_meta, note)}
+        if job is not None and job.only_qc:
             # 只给已经出好的某一张图补一次质检：不出图、不改图，也不往下游送东西
             base, stored = _load_stored(job[0])
             want = brief.strip() or str(stored.get("brief") or "").strip()
@@ -254,7 +285,7 @@ class GAQCReview:
             out_image = image
             out_mask = mask if mask is not None else image.new_zeros(image.shape[:3])
         else:
-            fixed_from, notes, _only_qc = job
+            fixed_from, notes = job.file, job.notes
             manual = edit_model.strip()
             if manual and ":" not in manual:
                 raise InputError("bad_edit_model", (
@@ -314,11 +345,13 @@ class GAQCReview:
         if len(checked) == len(results):
             out_meta["qc"] = [r.model_dump() for r in checked]
         ui = {"threshold": threshold, "note": note, "mode": "fix" if job else "review", "base": fixed_from,
-              "model": used_model,
+              "model": used_model, "target": subject_ratio,
               # 没质检的图：score 是 null，界面上显示"未质检"
+              # subject：主体占画面高度的几成，程序量的；不带透明底的图量不出来，是 null
               "results": [{"score": r.score if r else None, "passed": r.passed if r else None, **f,
+                           "subject": imaging.subject_ratio(im),
                            "issues": [d.model_dump() for d in r.details] if r else []}
-                          for r, f in zip(results, files, strict=True)],
+                          for r, f, im in zip(results, files, pils, strict=True)],
               "common": [c.model_dump() for c in shared]}
         return {"ui": {"ga_qc": [ui]},
                 "result": (out_image, out_mask, out_meta, _report(results, shared, threshold, note))}

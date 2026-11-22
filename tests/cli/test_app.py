@@ -407,3 +407,44 @@ def test_interrupt_json_emits_error_object(stub_comfy: type[StubComfy], tmp_wf: 
     stub_comfy.wait_exc = KeyboardInterrupt()
     r = runner.invoke(cli.app, ["run", str(tmp_wf), "--json"])
     assert r.exit_code == 130 and json.loads(r.stdout)["error"]["code"] == "interrupted"
+
+
+def _sprite(path: Path, top: int, bottom: int) -> None:
+    from PIL import Image
+    img = Image.new("RGBA", (100, 200), (0, 0, 0, 0))
+    img.paste((200, 60, 60, 255), (40, top, 60, bottom))
+    img.save(path)
+
+
+def test_fit_adjusts_only_out_of_range_and_backs_up(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from game_art import imaging
+    _sprite(tmp_path / "small.png", 60, 140)   # 占 40%：要放大
+    _sprite(tmp_path / "ok.png", 30, 170)      # 占 70%：不动
+    Image.new("RGB", (20, 20), "red").save(tmp_path / "icon.png")  # 没有透明底：不动
+    (tmp_path / "small.json").write_text('{"brief": "x"}', encoding="utf-8")
+    ok_before = (tmp_path / "ok.png").read_bytes()
+    res = runner.invoke(cli.app, ["fit", str(tmp_path), "--json"])
+    assert res.exit_code == 0, res.output
+    rows = {Path(r["file"]).name: r for r in json.loads(res.stdout)["files"]}
+    assert rows["small.png"]["action"] == "fit" and rows["ok.png"]["action"] == rows["icon.png"]["action"] == "skip"
+    with Image.open(tmp_path / "small.png") as im:
+        assert abs((imaging.subject_ratio(im) or 0) - 0.7) < 0.02
+    assert (tmp_path / "ok.png").read_bytes() == ok_before
+    with Image.open(tmp_path / "_fit_backup" / "small.png") as im:
+        assert abs((imaging.subject_ratio(im) or 0) - 0.4) < 0.01  # 备份的是原图
+    assert json.loads((tmp_path / "small.json").read_text(encoding="utf-8"))["resize"]["from"] == 0.4
+    assert json.loads((tmp_path / "_fit_backup" / "small.json").read_text(encoding="utf-8")) == {"brief": "x"}
+
+
+def test_fit_dry_run_changes_nothing(tmp_path: Path) -> None:
+    _sprite(tmp_path / "small.png", 60, 140)
+    before = (tmp_path / "small.png").read_bytes()
+    res = runner.invoke(cli.app, ["fit", str(tmp_path / "small.png"), "--dry-run"])
+    assert res.exit_code == 0 and "会调整" in res.output
+    assert (tmp_path / "small.png").read_bytes() == before and not (tmp_path / "_fit_backup").exists()
+
+
+def test_fit_missing_path_exit_3(tmp_path: Path) -> None:
+    assert runner.invoke(cli.app, ["fit", str(tmp_path / "nope.png")]).exit_code == 3

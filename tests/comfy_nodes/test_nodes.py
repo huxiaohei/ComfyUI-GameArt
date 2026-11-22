@@ -411,7 +411,8 @@ def test_qc_review_lazy_inputs() -> None:
     assert spec["optional"]["meta"][1]["lazy"] and "lazy" not in spec["optional"]["style"][1]
     # 参考图节点不花钱，不用按需读取；新加的开关排在最后，旧工作流里存的参数位置不会错开
     assert "lazy" not in spec["optional"]["refs"][1]
-    assert list(spec["optional"])[-5:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model", "auto_qc"]
+    assert list(spec["optional"])[-6:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model", "auto_qc",
+                                           "subject_ratio"]
     assert spec["optional"]["auto_qc"][1]["default"] is True
     assert spec["optional"]["fix_quality"][1]["default"] == "high"
     assert spec["optional"]["fix_fidelity"][1]["default"] == "high"
@@ -552,6 +553,34 @@ def test_qc_review_without_auto_qc(monkeypatch: pytest.MonkeyPatch, temp_dir: pa
     out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "notes": ["步摇糊"]}), auto_qc=False)
     assert [c[0] for c in r.calls] == ["chat", "edit"] and out["ui"]["ga_qc"][0]["results"][0]["score"] is None
     assert "qc" not in out["result"][2]
+
+
+def test_qc_review_measures_subject_and_resizes_locally(monkeypatch: pytest.MonkeyPatch,
+                                                         temp_dir: pathlib.Path) -> None:
+    """主体占画面几成由程序按透明度量；「调整大小」在本机缩放到目标占比，不调用任何模型。"""
+    r = SeqRouter()
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    image = torch.rand(1, 100, 60, 3)
+    mask = torch.ones(1, 100, 60)  # ComfyUI 的蒙版：1 = 透明
+    mask[0, 30:70, 20:40] = 0  # 主体高 40，占画面高度的四成
+    out = nodes.GAQCReview().run(image=image, mask=mask, meta={"brief": "貂蝉", "tag": "b/1"}, auto_qc=False)
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["results"][0]["subject"] == pytest.approx(0.4) and ui["target"] == pytest.approx(0.7)
+    full = ui["results"][0]["full"]
+    out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "resize": True}), auto_qc=False)
+    assert r.calls == []  # 没有调用模型
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["mode"] == "fix" and ui["resized"] is True and ui["base"] == full
+    assert ui["results"][0]["subject"] == pytest.approx(0.7, abs=0.02) and ui["results"][0]["full"] != full
+    got_image, got_mask, meta, report = out["result"]
+    assert got_image.shape == (1, 100, 60, 3) and got_mask.shape == (1, 100, 60)
+    assert meta["brief"] == "貂蝉" and meta["resize"]["from"] == 0.4 and "没有调用模型" in report
+    # 目标占比可以在节点上改
+    out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "resize": True}), subject_ratio=0.5)
+    assert out["ui"]["ga_qc"][0]["results"][0]["subject"] == pytest.approx(0.5, abs=0.02)
+    # 不带透明底的图量不出主体：占比是空的
+    out = nodes.GAQCReview().run(image=torch.rand(1, 8, 8, 3), brief="图标", auto_qc=False)
+    assert out["ui"]["ga_qc"][0]["results"][0]["subject"] is None
 
 
 def test_reference_images_shrink(tmp_path: pathlib.Path) -> None:

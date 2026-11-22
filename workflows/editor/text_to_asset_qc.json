@@ -438,7 +438,7 @@
       ],
       "size": [
         340,
-        560
+        586
       ],
       "flags": {},
       "order": 6,
@@ -556,6 +556,14 @@
           "widget": {
             "name": "auto_qc"
           }
+        },
+        {
+          "name": "subject_ratio",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "subject_ratio"
+          }
         }
       ],
       "outputs": [
@@ -601,7 +609,8 @@
         "high",
         "high",
         "",
-        true
+        true,
+        0.7
       ]
     },
     {

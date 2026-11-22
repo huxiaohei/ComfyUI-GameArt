@@ -6,6 +6,9 @@
 // - 点「修这张」：在选中的这张图上直接改。把"修哪张、改什么"写进本节点的 fix 再运行一次；这一次后台不向上游要图，
 //   而是拿上次存下的原图去改，改完的图作为新的一张追加在缩略图后面。排队之后马上把 fix 清空，
 //   所以之后正常点运行还是整条流程重跑。
+// - 主体大小：每张图的主体占画面高度几成由后台按透明度量出来（不问模型），显示在得分下面。
+//   点「调整大小」：同样写进 fix 再运行一次，后台在本机把这张图的主体缩放到目标占比并居中，不调模型、不花钱；
+//   结果和修图一样作为新的一张追加在后面，得分和问题沿用原来那张的。
 // - 「清空修订意见」：把上游 feedback 清空（换素材、或想从头再来时用）。
 // - 和「保存资产」联动：每张图存到了哪个文件，由 save_asset.js 在保存后记到这里对应的那一条上（saved）。
 //   点缩略图时，下游「保存资产」节点的预览跟着切到这张图；「另存这张…」把它复制到选定的文件夹。
@@ -36,6 +39,8 @@ const CSS = `
 .ga-qc-tag.must { color: #e5734f; }
 .ga-qc-tags { display: flex; gap: 3px; flex: none; }
 .ga-qc-none { opacity: .6; padding: 2px 0; }
+.ga-qc-size { opacity: .75; padding: 1px 0 3px; }
+.ga-qc-size.off { opacity: 1; color: #e0a83c; }
 .ga-qc textarea { width: 100%; box-sizing: border-box; min-height: 40px; resize: vertical; margin-top: 4px;
   background: var(--comfy-input-bg, #222); color: inherit; border: 1px solid var(--border-color, #555);
   border-radius: 4px; padding: 4px; font: inherit; }
@@ -75,6 +80,8 @@ export function buildState(payload) {
     thumb: r.thumb ?? null,
     full: r.full ?? "", // 原图在后台临时目录里的名字，「修这张」拿它当底图
     path: r.path ?? "", // 同一张图的完整路径（质检时的原样）；没有保存记录时「另存这张」用它
+    // 主体占画面高度的几成（0 到 1），后台按透明度量的；不带透明底的图量不出来，是 null
+    subject: r.subject === null || r.subject === undefined ? null : Number(r.subject),
     saved: null, // 「保存资产」把这张图存成了哪个文件：{ image: 预览用的描述, file: 完整路径 }，保存后才有
     issues: (r.issues ?? []).map((i) => ({
       text: String(i.text ?? ""),
@@ -95,11 +102,18 @@ export function buildState(payload) {
   });
   return {
     results, common, current, note: "", threshold: Number(payload?.threshold) || 0, info: payload?.note ?? "",
+    target: Number(payload?.target) || DEFAULT_TARGET, // 主体应该占画面高度的几成（节点上的 subject_ratio）
     lastBatch: results.map((_, i) => i), // 最近一次运行产出的是哪几张；紧接着「保存资产」按这个顺序对号入座
   };
 }
 
-// 「修这张」的结果：不替换原来的列表，把新图追加在后面并切过去，记下它是从哪一张改来的。
+// 主体占比离目标差多少以内算合格（和后台 imaging.SUBJECT_TOLERANCE 一致）
+export const DEFAULT_TARGET = 0.7;
+export const SUBJECT_TOLERANCE = 0.03;
+export const subjectOff = (state, r) =>
+  r?.subject !== null && r?.subject !== undefined && Math.abs(r.subject - (state?.target || DEFAULT_TARGET)) > SUBJECT_TOLERANCE;
+
+// 「修这张」和「调整大小」的结果：不替换原来的列表，把新图追加在后面并切过去，记下它是从哪一张改来的。
 export function appendFix(state, payload) {
   const added = buildState(payload).results;
   const parent = state.results.findIndex((r) => r.full && r.full === payload?.base);
@@ -108,12 +122,24 @@ export function appendFix(state, payload) {
     for (const i of r.issues) i.on = i.level === "must";
     r.from = parent >= 0 ? parent + 1 : 0;
     r.model = String(payload?.model ?? ""); // 这一版是哪个模型修的，方便对比不同模型的效果
+    if (payload?.resized && parent >= 0) {
+      // 只是在本机缩放了一下，画的内容没变：得分和问题沿用原来那张的，不用再质检一次
+      const src = state.results[parent];
+      r.resized = true;
+      r.score = src.score;
+      r.passed = src.passed;
+      r.issues = src.issues.map((i) => ({ ...i, on: false }));
+    }
     state.results.push(r);
   }
   if (added.length) state.current = state.results.length - 1;
   state.threshold = Number(payload?.threshold) || state.threshold;
+  state.target = Number(payload?.target) || state.target;
   return state;
 }
+
+// 缩略图和标题上写这张图是怎么来的
+const origin = (r) => (r.from ? `由第 ${r.from} 张${r.resized ? "调整大小" : `修改${r.model ? `，${r.model}` : ""}`}` : "");
 
 // 一次修图最多带几条质检问题。改得越多，模型越像是整张重画，满意的部分越保不住。
 export const MAX_FIX_ISSUES = 3;
@@ -333,7 +359,7 @@ function render(node, root) {
       img.addEventListener("error", () => (img.style.visibility = "hidden")); // 临时目录被清掉了：只留得分
       strip.append(el("div", {
         class: `ga-qc-thumb${i === state.current ? " on" : ""}`,
-        title: r.from ? `第 ${i + 1} 张（由第 ${r.from} 张修改${r.model ? `，${r.model}` : ""}）` : `第 ${i + 1} 张`,
+        title: r.from ? `第 ${i + 1} 张（${origin(r)}）` : `第 ${i + 1} 张`,
         onclick: () => {
           state.current = i;
           render(node, root);
@@ -352,9 +378,19 @@ function render(node, root) {
   const verdict = cur.passed ? "通过" : "未通过";
   root.append(el("div", {
     class: "ga-qc-head",
-    text: `${many ? `第 ${state.current + 1} 张${cur.from ? `（由第 ${cur.from} 张修改${cur.model ? `，${cur.model}` : ""}）` : ""}　` : ""}`
+    text: `${many ? `第 ${state.current + 1} 张${cur.from ? `（${origin(cur)}）` : ""}　` : ""}`
       + (unchecked ? "未质检" : `得分 ${cur.score.toFixed(1)} / 10（${verdict}，及格线 ${state.threshold}）`),
   }));
+  const target = state.target || DEFAULT_TARGET;
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  if (cur.subject !== null && cur.subject !== undefined) {
+    const off = subjectOff(state, cur);
+    root.append(el("div", {
+      class: off ? "ga-qc-size off" : "ga-qc-size",
+      title: "按图片的透明度直接量出来的，不是模型估的。目标在节点的 subject_ratio 里改。",
+      text: `主体占画面高度 ${pct(cur.subject)}（目标 ${pct(target)}${off ? `，偏${cur.subject < target ? "小" : "大"}，可以点「调整大小」` : "，合适"}）`,
+    }));
+  }
   if (unchecked) {
     root.append(el("div", {
       class: "ga-qc-none",
@@ -432,6 +468,30 @@ function render(node, root) {
       }
     },
   });
+  const resize = el("button", {
+    text: "调整大小",
+    title: `在本机把这张图的主体等比例缩放到占画面高度的 ${pct(target)} 并居中，不调用模型、不花钱。`
+      + "结果作为新的一张出现在后面，原来那张保留。目标在节点的 subject_ratio 里改。",
+    onclick: async () => {
+      if (!widget(node, "fix")) {
+        toast("error", "节点上没有 fix 这一栏：节点代码更新后需要重启 ComfyUI，并重新放一个「质检结果」节点。");
+        return;
+      }
+      if (!cur.full) {
+        toast("warn", "这张图是旧版本留下的结果，后台没有存原图。请先正常运行一次。");
+        return;
+      }
+      if (cur.subject / target < 0.77) {
+        toast("warn", `这张图的主体只占 ${pct(cur.subject)}，放大到 ${pct(target)} 要放大三成以上，线条会发虚。照样会调整，但更建议重新生成。`);
+      }
+      setWidget(node, "fix", JSON.stringify({ file: cur.full, resize: true }));
+      try {
+        await app.queuePrompt(0, 1);
+      } finally {
+        setWidget(node, "fix", ""); // 只对这一次运行有效
+      }
+    },
+  });
   const clear = el("button", { text: "清空修订意见", title: "把「提示词扩写」里累积的修订意见清空", onclick: () => {
     const expand = feedbackTarget(node);
     if (expand && setWidget(expand, "feedback", "")) toast("info", "已清空「提示词扩写」里的修订意见。");
@@ -470,7 +530,10 @@ function render(node, root) {
     },
   });
   // 还没质检的图才显示「质检这张」，排在最前面
-  root.append(el("div", { class: "ga-qc-actions" }, [unchecked ? checkThis : null, fixThis, regenerate, saveAs, clear, counter]));
+  // 「调整大小」只在量得出主体、且占比离目标超出允许范围时显示
+  root.append(el("div", { class: "ga-qc-actions" }, [
+    unchecked ? checkThis : null, fixThis, subjectOff(state, cur) ? resize : null, regenerate, saveAs, clear, counter,
+  ]));
   refresh();
 }
 
