@@ -19,7 +19,7 @@ from game_art.style import StyleCard
 from tests.conftest import write_cfg
 
 ALL = {"GAStyleCard", "GAReferenceImages", "GAPromptExpand", "GAReferenceAnalyze", "GACloudGenerate", "GACloudEdit",
-       "GARemoveBackground", "GAQCScore", "GAQCReview", "GAComposeTemplate", "GASaveAsset"}
+       "GARemoveBackground", "GAMakeSeamless", "GAQCScore", "GAQCReview", "GAComposeTemplate", "GASaveAsset"}
 
 
 @pytest.fixture(autouse=True)
@@ -1017,3 +1017,11 @@ def test_model_dropdown_includes_upstream_models(tmp_path: pathlib.Path, monkeyp
         choices = nodes.GAPromptExpand.INPUT_TYPES()["required"]["profile"][0]
     models._MEM.clear()
     assert choices[:2] == ["image", "text"] and {"aihubmix:chat-x", "aihubmix:flux-y"} <= set(choices)
+
+
+def test_make_seamless_node_keeps_size_and_gives_tiled_preview() -> None:
+    image = torch.rand(2, 16, 24, 3)
+    out, mask, preview = nodes.GAMakeSeamless().run(image=image, blend=0.25)
+    assert out.shape == (2, 16, 24, 3)
+    assert mask.shape == (2, 16, 24)
+    assert preview.shape == (2, 32, 48, 3)

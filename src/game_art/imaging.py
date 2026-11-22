@@ -6,7 +6,7 @@ import io
 import math
 from typing import Literal, cast
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from game_art.errors import InputError
 
@@ -120,6 +120,45 @@ def shrink_to(img: Image.Image, max_side: int) -> Image.Image:
     scale = max_side / max(img.size)
     size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
     return img.resize(size, Image.Resampling.LANCZOS)
+
+
+def _edge_ramp(length: int, blend: float) -> Image.Image:
+    """一条 1 像素高的渐变：两端是 0，往里 blend 这么宽的一段逐渐升到 255，中间一直是 255。"""
+    width = max(1, round(length * blend))
+    row = [round(255 * min(1.0, min(i, length - 1 - i) / width)) for i in range(length)]
+    ramp = Image.new("L", (length, 1))
+    ramp.putdata(row)
+    return ramp
+
+
+def make_seamless(img: Image.Image, blend: float = 0.25) -> Image.Image:
+    """把一张贴图处理成能无缝平铺的：上下左右首尾相接时看不出接缝。
+
+    做法分两遍，先处理左右、再处理上下。每一遍都把图沿这个方向错开半张（原来的两条边转到了中间，
+    错开后的图自己的两边天然接得上），再和没错开的图融合：靠近两边用错开后的图，中间用没错开的图，
+    过渡带的宽度是边长的 blend 倍。分两遍是因为一次同时错开横竖两个方向时，错开后的图中间有个十字接缝，
+    会在靠近四边的地方露出来。
+    适合草地、土地、石板、水面这类没有明显主体的材质；有单独物体的图会在过渡带里出现重影。
+    blend 取 0.05 到 0.5；不透明图片照原样处理，带透明度的图连透明度一起融合。
+    """
+    blend = min(0.5, max(0.05, blend))
+    base = img if img.mode in ("RGB", "RGBA") else img.convert("RGBA")
+    w, h = base.size
+    across = _edge_ramp(w, blend).resize((w, h))
+    base = Image.composite(base, ImageChops.offset(base, w // 2, 0), across)
+    down = _edge_ramp(h, blend).rotate(90, expand=True).resize((w, h))
+    return Image.composite(base, ImageChops.offset(base, 0, h // 2), down)
+
+
+def tile_preview(img: Image.Image, repeat: int = 2) -> Image.Image:
+    """把一张贴图横竖各铺 repeat 次拼成一张，用来检查接缝。"""
+    repeat = max(1, repeat)
+    w, h = img.size
+    out = Image.new(img.mode, (w * repeat, h * repeat))
+    for x in range(repeat):
+        for y in range(repeat):
+            out.paste(img, (x * w, y * h))
+    return out
 
 
 def flatten_for_review(img: Image.Image) -> Image.Image:

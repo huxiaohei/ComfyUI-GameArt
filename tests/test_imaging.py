@@ -1,5 +1,6 @@
 import builtins
 import importlib.util
+import random
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,9 @@ from game_art.imaging import (
     flatten_for_review,
     from_bytes,
     has_transparency,
+    make_seamless,
     remove_background,
+    tile_preview,
     to_data_url,
     to_png_bytes,
     trim_alpha,
@@ -135,3 +138,44 @@ def test_clean_faint_alpha_zero_is_noop_and_handles_rgb() -> None:
     assert clean_faint_alpha(Image.new("RGB", (4, 4), (5, 5, 5)), 128).getpixel((0, 0)) == (5, 5, 5, 255)
     # 整张都很淡：全部擦掉；阈值超过 255 按 255 算
     assert clean_faint_alpha(im, 999).getchannel("A").getextrema() == (0, 0)
+
+
+def _noise(size: tuple[int, int], mode: str = "RGB") -> Image.Image:
+    rng = random.Random(7)
+    img = Image.new(mode, size)
+    bands = len(mode)
+    img.putdata([tuple(rng.randrange(256) for _ in range(bands)) for _ in range(size[0] * size[1])])
+    return img
+
+
+def _wrap_jump(img: Image.Image) -> int:
+    """平铺时接缝两侧的最大色差：最左列对最右列、最上行对最下行。"""
+    w, h = img.size
+    data = img.convert("L").tobytes()
+    lr = max(abs(data[y * w] - data[y * w + w - 1]) for y in range(h))
+    tb = max(abs(data[x] - data[(h - 1) * w + x]) for x in range(w))
+    return max(lr, tb)
+
+
+def test_make_seamless_edges_match_everywhere_and_center_kept() -> None:
+    # 斜向渐变：左上暗、右下亮，直接平铺时左右、上下接缝处都有明显色差
+    grad = Image.linear_gradient("L").resize((64, 64))
+    src = Image.blend(grad, grad.rotate(90), 0.5).convert("RGB")
+    assert _wrap_jump(src) > 100
+    out = make_seamless(src, 0.25)
+    assert out.size == src.size and out.mode == "RGB"
+    assert _wrap_jump(out) <= 8  # 四条边整条都接得上，包括靠近角上的位置
+    assert out.getpixel((32, 32)) == src.getpixel((32, 32))  # 中间保持原图
+
+
+def test_make_seamless_keeps_alpha_and_clamps_blend() -> None:
+    src = _noise((20, 12), "RGBA")
+    assert make_seamless(src, 5.0).mode == "RGBA"
+    assert make_seamless(src.convert("L"), 0.0).mode == "RGBA"
+
+
+def test_tile_preview_repeats() -> None:
+    src = _noise((10, 6))
+    out = tile_preview(src, 2)
+    assert out.size == (20, 12)
+    assert out.getpixel((13, 8)) == src.getpixel((3, 2))

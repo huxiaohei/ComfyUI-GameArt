@@ -68,6 +68,7 @@
 | `text_to_asset` | 同上，不带质检 |
 | `ref_to_asset` | 以参考图为基础改图：参考图 + 描述 → 出图 → 保存 |
 | `style_samples` | 定画风用：一次出 4 张样张 |
+| `seamless_texture` | 做能平铺的地面、路面贴图：描述 → 出图 → 处理成无缝 → 保存，并给一张铺开的预览看接缝 |
 | `compose_template` | 把素材图和文字按版式合成一张成品（牌面、徽章等带字的图） |
 
 以 `text_to_asset_qc` 为例，从左到右有这几个节点，按顺序设置：
@@ -121,7 +122,7 @@ items:
 
 完整示例：`examples/briefs/demo.yaml`，里面是出 `examples/refs/` 那五张标准风格图用的完整描述，可以对照着看一条好用的描述有多具体。
 
-`asset_type` 决定构图：`icon`、`prop`、`character`、`ui_element` 会要求主体居中、背景干净；`background`、`illustration` 铺满画面。
+`asset_type` 决定构图：`icon`、`prop`、`character`、`ui_element` 会要求主体居中、背景干净；`background`、`illustration` 铺满画面；`texture` 是从正上方看的一整片材质，用来做平铺贴图。
 
 **沿用上次的提示词**（`reuse`，默认打开）：描述、素材种类、风格卡、修订意见都和之前某一次完全一样时，直接用那次扩写出的提示词，不再调用文字模型。同一个素材反复出图用的是同一段提示词，画风更稳。想换一种写法时把它关掉再运行一次。
 
@@ -208,6 +209,7 @@ Gemini 图片模型不支持透明背景，需要透明底时接「去背景」�
 | 从描述清单里取一项 | `ga run workflows/text_to_asset.json --set expand.briefs_path=<清单.yaml> --set expand.item=<id>` |
 | 参考图 + 描述 → 资源 | `ga run workflows/ref_to_asset.json --set ref.paths=<图片路径> --set expand.brief=<描述>` |
 | 风格样张 | `ga run workflows/style_samples.json --set expand.brief=<描述>` |
+| 无缝贴图 | `ga run workflows/seamless_texture.json --set expand.brief=<描述>` |
 | 模板合成 | `ga run workflows/compose_template.json --set 'art.image=@upload{<图>}' --set 'compose.vars_json={"name":"萬"}'` |
 | 只看参数，不出图 | 在 `ga run` 后面加 `--dry-run`（不联网、不花钱） |
 

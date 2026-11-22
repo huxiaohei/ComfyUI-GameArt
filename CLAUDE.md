@@ -123,6 +123,7 @@ class GACloudGenerate:
 | `GAReferenceAnalyze` | `analyze_reference` | `steps.py`，模板在 `prompts/analyze.md` |
 | `GACloudGenerate` / `GACloudEdit` | `router.generate` / `router.edit` | `providers/router.py` |
 | `GARemoveBackground` | `remove_background` | `imaging.py` |
+| `GAMakeSeamless` | `make_seamless`、`tile_preview`（本机处理，不调模型） | `imaging.py` |
 | `GAQCScore` | `qc_score` | `steps.py`，模板在 `prompts/qc.md` |
 | `GAQCReview` | `qc_score`、`common_issues`；修图时 `fix_instruction`、`router.edit` | `steps.py`，模板在 `prompts/qc.md`、`prompts/common_issues.md`；节点上的面板在 `comfy_nodes/web/qc_review.js` |
 | `GAComposeTemplate` | `compose` | `compose.py` |
@@ -216,6 +217,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 | 文案 → 资源 | `ga run workflows/text_to_asset.json --set expand.brief=<描述> --set gen.n=1` |
 | 参考图 + 文案 → 资源 | `ga run workflows/ref_to_asset.json --set ref.paths=<图片路径> --set expand.brief=<描述>`（多张用分号隔开） |
 | 风格样张 | `ga run workflows/style_samples.json --set expand.brief=<描述>` |
+| 无缝贴图 | `ga run workflows/seamless_texture.json --set expand.brief=<描述>`（出图时 `transparent=false`，再过 `GAMakeSeamless`） |
 | 模板合成 | `ga run workflows/compose_template.json --set 'art.image=@upload{<图>}' --set 'compose.vars_json={"name":"萬"}'`（先按 `examples/fonts/README.md` 下载示例字体） |
 | 只看补丁后的工作流 | `ga run <工作流> --set ... --dry-run`（不联网、不花钱） |
 | 批量开始 | `ga batch start <清单.yaml> [--out D]` |
@@ -329,6 +331,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 ## 已知限制
 
 - **Gemini 图片模型**不支持透明背景和遮罩局部重绘；需要透明底时接"去背景"节点。
+- **无缝贴图只适合没有主体的材质**：`make_seamless` 分两遍做，先左右后上下：每一遍把图沿这个方向错开半张，再和没错开的图融合（靠近两边用错开后的图，中间用没错开的图，过渡带宽度是边长的 `blend` 倍）。不要改成一次同时错开两个方向，那样错开后的图中间的十字接缝会在四边露出来。草地、土地、石板、水面效果好；图上有单独的物体，或纹理有明显方向（斜向木纹、透视的砖墙）时，过渡带里会出现重影，这类图要换描述重出，不是调 `blend` 能解决的。
 - **预算是"超过后暂停"**，不是硬上限，最多会超出约"一项出图加质检"的费用。
 - **费用是估算**：按配置里的单价计算，没写单价的模型记为 0。以服务商账单为准。
 - **预算核算要求 ComfyUI 和命令行共用同一份配置**（同一个 `data_dir`），否则账本会分叉。

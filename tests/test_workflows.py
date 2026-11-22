@@ -11,11 +11,13 @@ from game_art.comfy.workflow import apply_sets, load_workflow
 from game_art.paths import REPO_ROOT, resolve_repo_path
 
 WF_DIR = REPO_ROOT / "workflows"
-NAMES = ["text_to_asset", "text_to_asset_qc", "ref_to_asset", "style_samples", "compose_template"]
+NAMES = ["text_to_asset", "text_to_asset_qc", "ref_to_asset", "style_samples", "compose_template",
+         "seamless_texture"]
 WORKFLOW_FILES = [WF_DIR / f"{n}.json" for n in NAMES]
 BUILTINS: dict[str, Any] = {
     "LoadImage": {"required": {"image": ("STRING",)}, "returns": ("IMAGE", "MASK")},
     "PreviewAny": {"required": {"source": ("*",)}, "returns": ("STRING",)},  # ComfyUI 自带：把任意值显示成文字
+    "PreviewImage": {"required": {"images": ("IMAGE",)}, "returns": ()},  # ComfyUI 自带：预览图像
 }
 
 
