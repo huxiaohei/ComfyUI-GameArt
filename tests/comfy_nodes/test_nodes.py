@@ -22,6 +22,13 @@ ALL = {"GAStyleCard", "GAReferenceImages", "GAPromptExpand", "GAReferenceAnalyze
        "GARemoveBackground", "GAQCScore", "GAQCReview", "GAComposeTemplate", "GASaveAsset"}
 
 
+@pytest.fixture(autouse=True)
+def _fresh_expand_memory() -> None:
+    """扩写的"沿用上次"在找不到配置目录时记在内存里：每个测试从空白开始，互不影响。"""
+    from comfy_nodes.nodes import prompt_expand
+    prompt_expand._MEMORY.clear()
+
+
 class FakeLedger:
     pricing: ClassVar[dict[str, Pricing]] = {"fake:img": Pricing(per_image=0.5)}
 
@@ -177,8 +184,9 @@ def test_reference_images_extra_image_slots(tmp_path: pathlib.Path) -> None:
     """拖图进来时每张图占一个接线口；顺序是 paths → images → image_2 … image_8，和连线先后无关。"""
     cls: Any = nodes.GAReferenceImages
     optional = cls.INPUT_TYPES()["optional"]
-    assert list(optional) == ["images", *(f"image_{i}" for i in range(2, 9))]
-    assert all(spec[0] == "IMAGE" for spec in optional.values())
+    slots = ["images", *(f"image_{i}" for i in range(2, 9))]
+    assert list(optional) == [*slots, "shrink", "shrink_size"]  # 开关排在接线口后面
+    assert all(optional[name][0] == "IMAGE" for name in slots)
     a = tmp_path / "a.png"
     Image.new("RGB", (9, 9)).save(a)
     refs, preview = cls().run(paths=str(a), image_3=torch.zeros(1, 3, 3, 3), images=torch.zeros(1, 1, 1, 3),
@@ -403,7 +411,8 @@ def test_qc_review_lazy_inputs() -> None:
     assert spec["optional"]["meta"][1]["lazy"] and "lazy" not in spec["optional"]["style"][1]
     # 参考图节点不花钱，不用按需读取；新加的开关排在最后，旧工作流里存的参数位置不会错开
     assert "lazy" not in spec["optional"]["refs"][1]
-    assert list(spec["optional"])[-4:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model"]
+    assert list(spec["optional"])[-5:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model", "auto_qc"]
+    assert spec["optional"]["auto_qc"][1]["default"] is True
     assert spec["optional"]["fix_quality"][1]["default"] == "high"
     assert spec["optional"]["fix_fidelity"][1]["default"] == "high"
     node = nodes.GAQCReview()
@@ -514,6 +523,77 @@ def test_qc_review_fix_errors(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib
         run(fix='{"file": "0123456789ab.png", "notes": ["x"]}')
     with pytest.raises(RuntimeError, match="没有收到图片"):
         run()
+
+
+def test_qc_review_without_auto_qc(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
+    """关掉自动质检：不调用看图模型，图片照常往下传；之后可以只给选中的一张补质检。"""
+    r = SeqRouter('{"score":6,"issues":[{"text":"步摇糊","level":"must"}]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    image = torch.rand(2, 8, 8, 3)
+    out = nodes.GAQCReview().run(image=image, meta={"brief": "貂蝉", "tag": "b/1"}, auto_qc=False)
+    got_image, _mask, meta, report = out["result"]
+    assert got_image is image and r.calls == [] and "qc" not in meta
+    (ui,) = out["ui"]["ga_qc"]
+    assert [x["score"] for x in ui["results"]] == [None, None] and ui["common"] == []
+    assert all(x["issues"] == [] and x["full"] for x in ui["results"]) and report.count("未质检") == 2
+    # 只给第二张补质检：调用一次看图模型，结果里指明是哪一张，不产出新图
+    full = ui["results"][1]["full"]
+    out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "qc": True}), auto_qc=False)
+    assert [(c[0], c[1], c[3]) for c in r.calls] == [("chat", "vision", "b/1")]
+    (ui,) = out["ui"]["ga_qc"]
+    assert ui["mode"] == "qc" and ui["base"] == full and len(ui["results"]) == 1
+    assert ui["results"][0]["score"] == 6 and ui["results"][0]["issues"][0]["text"] == "步摇糊"
+    assert "full" not in ui["results"][0]  # 没有存新图
+    # 不在 ComfyUI 里时拿不到"拦住下游"的对象，前三个输出是 None；报告照常给
+    assert out["result"][:3] == (None, None, None) and "6.0/10" in out["result"][3]
+    # 关着自动质检时修图：改完也不质检
+    r.calls.clear()
+    r.texts = ['{"prompt":"改一下。"}']
+    out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "notes": ["步摇糊"]}), auto_qc=False)
+    assert [c[0] for c in r.calls] == ["chat", "edit"] and out["ui"]["ga_qc"][0]["results"][0]["score"] is None
+    assert "qc" not in out["result"][2]
+
+
+def test_reference_images_shrink(tmp_path: pathlib.Path) -> None:
+    """参考图发给模型前默认缩小到长边 512（按大小计费，对照画风不需要原尺寸）；小图不放大；可以关掉。"""
+    big, small = tmp_path / "big.png", tmp_path / "small.png"
+    Image.new("RGB", (1024, 768)).save(big)
+    Image.new("RGB", (200, 100)).save(small)
+    run = nodes.GAReferenceImages().run
+    refs, preview = run(paths=f"{big}\n{small}", images=torch.zeros(1, 2048, 1024, 3))
+    assert [r.size for r in refs] == [(512, 384), (200, 100), (256, 512)] and preview.shape[0] == 3
+    refs, _ = run(paths=str(big), shrink_size=256)
+    assert refs[0].size == (256, 192)
+    refs, _ = run(paths=str(big), shrink=False, shrink_size=256)
+    assert refs[0].size == (1024, 768)
+
+
+def test_prompt_expand_reuses_previous_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """输入都没变时沿用上次扩写的提示词，不再调用文字模型；记录存在配置目录里，重启后仍有效。"""
+    from comfy_nodes.nodes import prompt_expand
+    r = SeqRouter('{"prompt":"第一版","negative":"n1"}', '{"prompt":"第二版","negative":"n2"}',
+                  '{"prompt":"第三版","negative":"n3"}')
+    object.__setattr__(r, "settings", types.SimpleNamespace(data_dir=tmp_path))
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    run = nodes.GAPromptExpand().run
+    style = StyleCard(name="s", description="d")
+    prompt, negative, meta = run(brief="关羽", asset_type="character", style=style, feedback="头顶贴边")
+    assert (prompt, negative) == ("第一版", "n1") and "prompt_reused" not in meta and len(r.calls) == 1
+    # 一模一样（修订意见只是多了空行和列表符号）：沿用，不调用模型
+    prompt, negative, meta = run(brief=" 关羽 ", asset_type="character", style=style, feedback="- 头顶贴边\n\n")
+    assert (prompt, negative) == ("第一版", "n1") and meta["prompt_reused"] is True and len(r.calls) == 1
+    assert meta["text_model"] == "fake:txt"
+    assert json.loads((tmp_path / prompt_expand.CACHE_FILE).read_text())  # 记到了硬盘上
+    # 任何一项变了都重新扩写：修订意见、风格卡、素材种类
+    assert run(brief="关羽", asset_type="character", style=style, feedback="头顶贴边\n刀再长些")[0] == "第二版"
+    changed = StyleCard(name="s", description="d", positive="平涂")
+    assert run(brief="关羽", asset_type="character", style=changed, feedback="头顶贴边")[0].startswith("第三版")
+    assert len(r.calls) == 3
+    # 关掉"沿用"：强制重新扩写，并且新结果成为之后沿用的那一版
+    r.texts = ['{"prompt":"新写法","negative":"n"}']
+    assert run(brief="关羽", asset_type="character", style=style, feedback="头顶贴边", reuse=False)[0] == "新写法"
+    assert run(brief="关羽", asset_type="character", style=style, feedback="头顶贴边")[0] == "新写法"
+    assert len(r.calls) == 4
 
 
 def test_qc_review_needs_brief(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:

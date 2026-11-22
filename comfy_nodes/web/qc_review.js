@@ -69,7 +69,8 @@ function el(tag, props = {}, children = []) {
 // 免得为了某一张图的毛病把整批的描述改偏。
 export function buildState(payload) {
   const results = (payload?.results ?? []).map((r) => ({
-    score: Number(r.score) || 0,
+    // score 为 null = 这张图还没质检（关着自动质检时）；点「质检这张」后才有分数和问题
+    score: r.score === null || r.score === undefined ? null : Number(r.score) || 0,
     passed: !!r.passed,
     thumb: r.thumb ?? null,
     full: r.full ?? "", // 原图在后台临时目录里的名字，「修这张」拿它当底图
@@ -88,9 +89,9 @@ export function buildState(payload) {
     count: Number(c.count) || 0,
     on: (Number(c.count) || 0) * 2 > results.length,
   }));
-  let current = 0; // 默认看得分最高的那张
+  let current = 0; // 默认看得分最高的那张（都没质检时就是第一张）
   results.forEach((r, i) => {
-    if (r.score > results[current].score) current = i;
+    if ((r.score ?? -1) > (results[current].score ?? -1)) current = i;
   });
   return {
     results, common, current, note: "", threshold: Number(payload?.threshold) || 0, info: payload?.note ?? "",
@@ -116,6 +117,19 @@ export function appendFix(state, payload) {
 
 // 一次修图最多带几条质检问题。改得越多，模型越像是整张重画，满意的部分越保不住。
 export const MAX_FIX_ISSUES = 3;
+
+// 「质检这张」的结果：不新增图片，只把分数和问题填回被质检的那一张。
+export function applyQC(state, payload) {
+  const index = state.results.findIndex((r) => r.full && r.full === payload?.base);
+  const got = buildState(payload).results[0];
+  if (index < 0 || !got) return state;
+  for (const i of got.issues) i.on = i.level === "must";
+  Object.assign(state.results[index], { score: got.score, passed: got.passed, issues: got.issues });
+  state.current = index;
+  state.lastBatch = []; // 这次没有产出新图，「保存资产」也不会运行
+  state.threshold = Number(payload?.threshold) || state.threshold;
+  return state;
+}
 
 // 「修这张」用的意见：只取当前这张图勾选的"细节类"问题，加上我的补充。
 // 构图类问题（留白、贴边、比例、姿势）在原图上改不好，留给重新生成；整批的共性问题也是给重新生成用的。
@@ -325,18 +339,28 @@ function render(node, root) {
           render(node, root);
           showInSave(node, r); // 下游「保存资产」的预览跟着切到这张
         },
-      }, [img, el("div", { class: `s ${r.passed ? "ok" : "bad"}`, text: `${i + 1}${r.from ? "✎" : ""} · ${r.score.toFixed(1)}` })]));
+      }, [img, el("div", {
+        class: `s ${r.score === null ? "" : r.passed ? "ok" : "bad"}`,
+        text: `${i + 1}${r.from ? "✎" : ""} · ${r.score === null ? "未检" : r.score.toFixed(1)}`,
+      })]));
     });
     root.append(strip);
   }
 
   const cur = state.results[state.current];
+  const unchecked = cur.score === null;
   const verdict = cur.passed ? "通过" : "未通过";
   root.append(el("div", {
     class: "ga-qc-head",
-    text: `${many ? `第 ${state.current + 1} 张${cur.from ? `（由第 ${cur.from} 张修改${cur.model ? `，${cur.model}` : ""}）` : ""}　` : ""}得分 ${cur.score.toFixed(1)} / 10（${verdict}，及格线 ${state.threshold}）`,
+    text: `${many ? `第 ${state.current + 1} 张${cur.from ? `（由第 ${cur.from} 张修改${cur.model ? `，${cur.model}` : ""}）` : ""}　` : ""}`
+      + (unchecked ? "未质检" : `得分 ${cur.score.toFixed(1)} / 10（${verdict}，及格线 ${state.threshold}）`),
   }));
-  if (!cur.issues.length) root.append(el("div", { class: "ga-qc-none", text: "没有发现问题。" }));
+  if (unchecked) {
+    root.append(el("div", {
+      class: "ga-qc-none",
+      text: "这张图还没有质检。点下面的「质检这张」只给它质检；也可以直接在「我的补充」里写要改的地方。",
+    }));
+  } else if (!cur.issues.length) root.append(el("div", { class: "ga-qc-none", text: "没有发现问题。" }));
   for (const issue of cur.issues) {
     const tag = el("span", { class: "ga-qc-tags" }, [
       el("span", { class: `ga-qc-tag ${issue.level}`, text: issue.level === "must" ? "必须改" : "建议" }),
@@ -425,7 +449,28 @@ function render(node, root) {
       saveResultAs(node, cur).finally(() => (saving = false));
     },
   });
-  root.append(el("div", { class: "ga-qc-actions" }, [fixThis, regenerate, saveAs, clear, counter]));
+  const checkThis = el("button", {
+    text: many ? `质检第 ${state.current + 1} 张` : "质检这张",
+    title: "只给这一张图质检一次（调用一次看图模型），不重新出图，也不会重复保存。",
+    onclick: async () => {
+      if (!widget(node, "fix")) {
+        toast("error", "节点上没有 fix 这一栏：节点代码更新后需要重启 ComfyUI，并重新放一个「质检结果」节点。");
+        return;
+      }
+      if (!cur.full) {
+        toast("warn", "这张图是旧版本留下的结果，后台没有存原图。请先正常运行一次。");
+        return;
+      }
+      setWidget(node, "fix", JSON.stringify({ file: cur.full, qc: true }));
+      try {
+        await app.queuePrompt(0, 1);
+      } finally {
+        setWidget(node, "fix", ""); // 只对这一次运行有效
+      }
+    },
+  });
+  // 还没质检的图才显示「质检这张」，排在最前面
+  root.append(el("div", { class: "ga-qc-actions" }, [unchecked ? checkThis : null, fixThis, regenerate, saveAs, clear, counter]));
   refresh();
 }
 
@@ -470,7 +515,9 @@ app.registerExtension({
       if (!payload) return;
       node.properties = node.properties ?? {};
       const old = node.properties.ga_qc;
-      node.properties.ga_qc = payload.mode === "fix" && old?.results?.length ? appendFix(old, payload) : buildState(payload);
+      if (payload.mode === "qc" && old?.results?.length) node.properties.ga_qc = applyQC(old, payload);
+      else if (payload.mode === "fix" && old?.results?.length) node.properties.ga_qc = appendFix(old, payload);
+      else node.properties.ga_qc = buildState(payload);
       redraw();
     };
     const configured = node.onConfigure?.bind(node);

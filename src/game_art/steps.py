@@ -1,6 +1,7 @@
 """AI 步骤：提示词扩写 / 参考图分析 / 质检打分。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -144,6 +145,16 @@ def expand_prompt(router: ChatRouter, brief: str, *, asset_type: str, style: Sty
         prompt = _merge(prompt, style.positive)
         negative = _merge(negative, style.negative)
     return ExpandedPrompt(prompt=prompt, negative=negative)
+
+
+def expand_key(brief: str, *, asset_type: str, style: StyleCard | None, ref_description: str = "",
+               feedback: str = "", profile: str = "text") -> str:
+    """扩写的"指纹"：这些输入都没变，扩写出来的提示词就可以沿用上次的。修订意见按整理后的条目算。"""
+    payload = json.dumps({"brief": brief.strip(), "asset_type": asset_type, "profile": profile,
+                          "style": style.model_dump() if style else None,
+                          "ref_description": ref_description.strip(), "feedback": feedback_lines(feedback)},
+                         ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def analyze_reference(router: ChatRouter, images: list[Image.Image], *, focus: str = "风格",

@@ -48,7 +48,7 @@ class GAReferenceImages:
         return fingerprint(parse_ref_paths(paths, _input_dir()))
 
     @classmethod
-    def VALIDATE_INPUTS(cls, paths: str = "") -> bool | str:
+    def VALIDATE_INPUTS(cls, paths: str = "", **_kw: Any) -> bool | str:
         """点运行时、任何节点开始执行之前检查：paths 里写的图片都要存在，免得前面的步骤白跑、白花钱。"""
         problems = [f"找不到文件：{p}" if not p.exists() else f"不是文件：{p}"
                     for p in parse_ref_paths(paths if isinstance(paths, str) else "", _input_dir())
@@ -77,18 +77,26 @@ class GAReferenceImages:
                     "想把上一步生成的图直接当参考图时，也接到这里。")}),
                 **{name: ("IMAGE", {"tooltip": _SLOT_TIP + "接满一个会自动多出一个空位，最多 8 个。"})
                    for name in IMAGE_SLOTS[1:]},
+                "shrink": ("BOOLEAN", {"default": True, "tooltip": (
+                    "打开（默认）：参考图发给模型前先缩小，长边不超过下面的 shrink_size。"
+                    "参考图是按大小计费的，只用来对照画风时不需要原尺寸，缩小后能省下一部分费用。\n"
+                    "关闭：按原尺寸发送。参考图里有必须看清的细节（比如要照着画的兵器纹样、要在它基础上改的图）时关掉。")}),
+                "shrink_size": ("INT", {"default": 512, "min": 128, "max": 4096, "step": 64, "tooltip": (
+                    "缩小后长边的像素数，默认 512。只在 shrink 打开时有效；比它小的参考图不会被放大。")}),
             },
         }
 
     @ga_errors
-    def run(self, paths: str = "", images: torch.Tensor | None = None,
-            **more: torch.Tensor | None) -> tuple[list[Image.Image], torch.Tensor]:
+    def run(self, paths: str = "", images: torch.Tensor | None = None, shrink: bool = True,
+            shrink_size: int = 512, **more: torch.Tensor | None) -> tuple[list[Image.Image], torch.Tensor]:
         refs = load_ref_images(parse_ref_paths(paths, _input_dir()))
         slots: dict[str, torch.Tensor | None] = {"images": images, **more}
         for name in IMAGE_SLOTS:
             tensor = slots.get(name)
             if tensor is not None:
                 refs += [im.convert("RGBA") for im in tensors_to_pils(tensor)]
+        if shrink:
+            refs = [imaging.shrink_to(im, int(shrink_size)) for im in refs]
         if not refs:
             return (refs, torch.zeros((1, _PREVIEW_EMPTY[1], _PREVIEW_EMPTY[0], 3)))
         size = refs[0].size

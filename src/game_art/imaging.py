@@ -113,6 +113,15 @@ def _checkerboard(w: int, h: int, tile: int = 16) -> Image.Image:
     return bg
 
 
+def shrink_to(img: Image.Image, max_side: int) -> Image.Image:
+    """长边超过 max_side 时等比缩小到 max_side，否则原样返回；max_side <= 0 表示不缩小。"""
+    if max_side <= 0 or max(img.size) <= max_side:
+        return img
+    scale = max_side / max(img.size)
+    size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+    return img.resize(size, Image.Resampling.LANCZOS)
+
+
 def flatten_for_review(img: Image.Image) -> Image.Image:
     """RGBA 叠在棋盘格上转 RGB，让视觉模型能看出透明问题（残留底色、毛边）。"""
     rgba = img.convert("RGBA")

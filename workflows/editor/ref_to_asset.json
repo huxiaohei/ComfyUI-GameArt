@@ -14,7 +14,7 @@
       ],
       "size": [
         340,
-        378
+        430
       ],
       "flags": {},
       "order": 0,
@@ -67,6 +67,22 @@
           "name": "image_8",
           "type": "IMAGE",
           "link": null
+        },
+        {
+          "name": "shrink",
+          "type": "BOOLEAN",
+          "link": null,
+          "widget": {
+            "name": "shrink"
+          }
+        },
+        {
+          "name": "shrink_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "shrink_size"
+          }
         }
       ],
       "outputs": [
@@ -89,7 +105,9 @@
         "ga_id": "ref"
       },
       "widgets_values": [
-        ""
+        "",
+        false,
+        512
       ]
     },
     {
@@ -168,7 +186,7 @@
       "title": "风格卡 · style",
       "pos": [
         80,
-        518
+        570
       ],
       "size": [
         340,
@@ -223,7 +241,7 @@
       ],
       "size": [
         340,
-        546
+        572
       ],
       "flags": {},
       "order": 3,
@@ -297,6 +315,14 @@
           "widget": {
             "name": "tag"
           }
+        },
+        {
+          "name": "reuse",
+          "type": "BOOLEAN",
+          "link": null,
+          "widget": {
+            "name": "reuse"
+          }
         }
       ],
       "outputs": [
@@ -336,7 +362,8 @@
         "",
         "",
         "",
-        ""
+        "",
+        true
       ]
     },
     {

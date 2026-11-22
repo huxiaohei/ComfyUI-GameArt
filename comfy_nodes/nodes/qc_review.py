@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import uuid
@@ -95,23 +96,40 @@ def _load_stored(name: str) -> tuple[Image.Image, dict[str, Any]]:
     return base, meta if isinstance(meta, dict) else {}
 
 
-def parse_fix(fix: str) -> tuple[str, list[str]] | None:
-    """fix 是页面脚本写进来的 JSON：{"file": 要修的那张图, "notes": [修改意见]}；空 = 正常质检。"""
+def parse_fix(fix: str) -> tuple[str, list[str], bool] | None:
+    """fix 是页面脚本写进来的 JSON，空 = 正常运行。两种写法：
+    {"file": 要修的那张图, "notes": [修改意见]} = 在这张图上修改；
+    {"file": 那张图, "qc": true} = 只给这张图补一次质检（平时关着自动质检时用）。
+    返回 (图片名, 修改意见, 是否只质检)。"""
     if not (fix or "").strip():
         return None
     try:
         obj = json.loads(fix)
-        file, notes = obj["file"], obj["notes"]
+        file, only_qc = obj["file"], obj.get("qc") is True
+        notes = obj.get("notes", []) if only_qc else obj["notes"]
         if not isinstance(file, str) or not isinstance(notes, list) or not all(isinstance(n, str) for n in notes):
             raise ValueError("字段类型不对")
-    except (ValueError, KeyError, TypeError) as e:
-        raise InputError("bad_fix", f"fix 的内容不对（它由「修这张」按钮自动填写，平时应该留空）：{e}") from e
-    return file, [n.strip() for n in notes if n.strip()]
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise InputError("bad_fix", f"fix 的内容不对（它由节点上的按钮自动填写，平时应该留空）：{e}") from e
+    return file, [n.strip() for n in notes if n.strip()], only_qc
 
 
-def _report(results: list[QCResult], shared: list[CommonIssue], threshold: float, note: str) -> str:
+def _blocked() -> Any:
+    """只补质检的那次运行不该再往下游送图（否则「保存资产」会把同一张图再存一遍）：
+    用 ComfyUI 的 ExecutionBlocker 让下游这一次什么都不做。不在 ComfyUI 里（如单元测试）时返回 None。"""
+    try:
+        graph: Any = importlib.import_module("comfy_execution.graph")
+    except ImportError:
+        return None
+    return graph.ExecutionBlocker(None)
+
+
+def _report(results: list[QCResult | None], shared: list[CommonIssue], threshold: float, note: str) -> str:
     lines: list[str] = []
     for i, r in enumerate(results, 1):
+        if r is None:
+            lines.append(f"第 {i} 张：未质检")
+            continue
         verdict = "通过" if r.passed else "未通过"
         lines.append(f"第 {i} 张：{r.score:.1f}/10（{verdict}，及格线 {threshold:g}）")
         lines += [f"  - [{'必须改' if d.level == 'must' else '建议'}] {d.text}" for d in r.details]
@@ -184,6 +202,11 @@ class GAQCReview:
                     "填了就用它，上面 edit_profile 选的不再生效；留空则用 edit_profile。\n"
                     "用来试下拉里没有的模型：有些服务商的模型列表不全，实际能用的模型不一定列出来。"
                     "名字写错或服务商没有这个模型时，运行会报错并带上服务商返回的原因。")}),
+                "auto_qc": ("BOOLEAN", {"default": True, "tooltip": (
+                    "打开（默认）：每张图出来都自动质检一次。\n"
+                    "关闭：不自动质检，节省看图模型的费用，适合一次出好几张先挑一挑的阶段。"
+                    "图片照常显示和保存；想看哪一张的问题，选中它再点「质检这张」，只给这一张质检。"
+                    "没质检的图也可以直接「修这张」，把要改的地方写在「我的补充」里即可。")}),
             },
         }
 
@@ -199,11 +222,25 @@ class GAQCReview:
             profile: str = "vision", mask: torch.Tensor | None = None, meta: dict[str, Any] | None = None,
             style: StyleCard | None = None, brief: str = "", edit_profile: str = "image_edit", fix: str = "",
             tag: str = "", refs: list[Image.Image] | None = None, fix_with_refs: bool = True,
-            fix_quality: str = "high", fix_fidelity: str = "high", edit_model: str = "") -> dict[str, Any]:
+            fix_quality: str = "high", fix_fidelity: str = "high", edit_model: str = "",
+            auto_qc: bool = True) -> dict[str, Any]:
         job = parse_fix(fix)
         router = common.get_router()
         fixed_from = ""
         used_model = ""
+        if job is not None and job[2]:
+            # 只给已经出好的某一张图补一次质检：不出图、不改图，也不往下游送东西
+            base, stored = _load_stored(job[0])
+            want = brief.strip() or str(stored.get("brief") or "").strip()
+            if not want:
+                raise InputError("no_brief", "质检需要知道这张图原本想要什么：请在 brief 里写上描述")
+            r = qc_score(router, base, brief=want, style=style, threshold=threshold,
+                         tag=resolve_tag(tag, stored), profile=profile)
+            ui = {"threshold": threshold, "note": "", "mode": "qc", "base": job[0], "model": "", "common": [],
+                  "results": [{"score": r.score, "passed": r.passed,
+                               "issues": [d.model_dump() for d in r.details]}]}
+            stop = _blocked()
+            return {"ui": {"ga_qc": [ui]}, "result": (stop, stop, stop, _report([r], [], threshold, ""))}
         if job is None:
             if image is None:
                 raise InputError("no_image", "质检结果节点没有收到图片：请把上游的 image 接到本节点")
@@ -217,7 +254,7 @@ class GAQCReview:
             out_image = image
             out_mask = mask if mask is not None else image.new_zeros(image.shape[:3])
         else:
-            fixed_from, notes = job
+            fixed_from, notes, _only_qc = job
             manual = edit_model.strip()
             if manual and ":" not in manual:
                 raise InputError("bad_edit_model", (
@@ -262,21 +299,25 @@ class GAQCReview:
                 want = plan.prompt
 
         out_meta.pop("qc", None)
-        results = [qc_score(router, im, brief=want, style=style, threshold=threshold, tag=tag, profile=profile)
-                   for im in pils]
+        results: list[QCResult | None] = [
+            qc_score(router, im, brief=want, style=style, threshold=threshold, tag=tag, profile=profile)
+            if auto_qc else None for im in pils]
+        checked = [r for r in results if r is not None]
         shared: list[CommonIssue] = []
         note = ""
-        if job is None and len(results) > 1:
+        if job is None and len(checked) > 1:
             try:
-                shared = common_issues(router, [r.issues for r in results], tag=tag)
+                shared = common_issues(router, [r.issues for r in checked], tag=tag)
             except GAError as e:  # 归并只是锦上添花：失败了每张图自己的问题照样可用，在报告里说明
                 note = f"（没能归并出共性问题：{e.message}）"
         files = _store(pils, out_meta)
-        out_meta["qc"] = [r.model_dump() for r in results]
+        if len(checked) == len(results):
+            out_meta["qc"] = [r.model_dump() for r in checked]
         ui = {"threshold": threshold, "note": note, "mode": "fix" if job else "review", "base": fixed_from,
               "model": used_model,
-              "results": [{"score": r.score, "passed": r.passed, **f,
-                           "issues": [d.model_dump() for d in r.details]}
+              # 没质检的图：score 是 null，界面上显示"未质检"
+              "results": [{"score": r.score if r else None, "passed": r.passed if r else None, **f,
+                           "issues": [d.model_dump() for d in r.details] if r else []}
                           for r, f in zip(results, files, strict=True)],
               "common": [c.model_dump() for c in shared]}
         return {"ui": {"ga_qc": [ui]},
