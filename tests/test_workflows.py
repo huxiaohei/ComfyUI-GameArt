@@ -141,8 +141,8 @@ def test_load_workflow_resolves_nested_strings(tmp_path: Path) -> None:
 
 
 def test_nodes_resolve_repo_prefix() -> None:
-    card = nodes.GAStyleCard().run("@repo/examples/style_cards/guochao.yaml")[0]
-    assert card.name == "国潮插画风"
+    card = nodes.GAStyleCard().run("@repo/examples/style_cards/sanguo_chibi.yaml")[0]
+    assert card.name == "三国守御录 · 日系Q版"
 
 
 @pytest.mark.skipif(not (REPO_ROOT / "examples/fonts/SourceHanSerifHK-Bold.otf").is_file(),

@@ -30,13 +30,13 @@ class GAStyleCard:
         return {
             "required": {"path": ("STRING", {"default": "", "tooltip": (
                 "风格卡文件（.yaml）的路径。以 @repo/ 开头表示本项目目录下的文件，"
-                "例如 @repo/examples/style_cards/guochao.yaml；也可以写电脑上的完整路径。"
+                "例如 @repo/examples/style_cards/sanguo_chibi.yaml；也可以写电脑上的完整路径。"
                 "如果下面的编辑框里已经写了完整的风格内容，这里可以留空。\n"
                 "也可以把 .yaml 文件直接拖到本节点上。拿不到文件的完整路径时这里会显示「拖入:文件名」，"
                 "表示内容已经在下面的编辑框里、不再读文件；之后文件有改动，需要重新拖一次。")})},
             "optional": {"edit": ("STRING", {"default": "", "multiline": True, "placeholder": (
                 "在这里直接编辑风格（可留空）。写了的字段会覆盖文件里的同名字段，例如：\n"
-                "positive: 国潮插画, 平涂上色, 描金线条\n"
+                "positive: 日系Q版卡通, 两层明暗的平涂, 深褐色线稿\n"
                 "negative: 写实光影, 3D渲染\n"
                 "palette: [\"#C8372D\", \"#D4A93C\"]\n"
                 "rules:\n  - 色块之间用细金线勾边"), "tooltip": (

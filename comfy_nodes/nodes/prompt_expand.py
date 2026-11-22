@@ -75,7 +75,7 @@ class GAPromptExpand:
             "required": {
                 "brief": ("STRING", {"multiline": True, "default": "", "placeholder": "用一两句话描述想要的素材",
                                      "tooltip": (
-                    "你想要什么素材，用大白话写一两句即可，例如「一枚国潮风铜钱图标」。"
+                    "你想要什么素材，用大白话写一两句即可，例如「一座圆筒形的茅草顶小粮仓」。"
                     "不用写专业提示词，这个节点会替你扩写。不要要求画文字，文字由模板合成。")}),
                 "asset_type": (list(ASSET_TYPES), {"default": "icon", "tooltip": (
                     "素材的种类，决定构图方式：\n" + "\n".join(f"· {k}：{v}" for k, v in ASSET_TYPES.items()))}),

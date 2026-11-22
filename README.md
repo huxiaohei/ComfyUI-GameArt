@@ -53,7 +53,7 @@
 7. 出第一张图（会调用云端模型，按示例配置约 0.04 美元）：
 
    ```bash
-   uv run ga run workflows/text_to_asset.json --set expand.brief=一枚国潮风铜钱图标 --set gen.n=1
+   uv run ga run workflows/text_to_asset.json --set expand.brief=一座圆筒形的茅草顶小粮仓 --set gen.n=1
    ```
 
    命令结束时会打印图片保存的位置。也可以在 ComfyUI 编辑器左侧"工作流"里打开 `game_art/text_to_asset`，填好"提示词扩写 · expand"节点的 `brief` 后点运行。
@@ -77,16 +77,19 @@
 一份 `.yaml` 文件，写清一整套素材共用的画风。把文件拖到「风格卡」节点上，或在 `path` 里填路径；内容会显示在 `edit` 框里，可以直接改。
 
 ```yaml
-name: 国潮插画风                  # 必填
-description: 平涂配色加描金线条…   # 必填，一句话说明
-palette: ["#C8372D", "#D4A93C"]   # 可选，色板
-positive: 国潮插画, 平涂上色       # 可选，原样拼在提示词后面，适合写每张图都必须遵守的硬性要求
-negative: 写实光影, 3D渲染         # 可选，不希望出现的东西
-rules:                            # 可选，给扩写模型看的规则
-  - 色块之间用细金线勾边
+name: 三国守御录 · 日系Q版                   # 必填
+description: 三国题材塔防游戏的日系Q版卡通画风…  # 必填，一句话说明
+palette: ["#3A2B2E", "#FFF6E6", "#F6B93B"]   # 可选，色板
+positive: 日系Q版卡通, 两层明暗的赛璐璐平涂, 深褐色线稿   # 可选，原样拼在提示词后面，适合写每张图都必须遵守的硬性要求
+negative: 写实, 3D渲染, 厚涂, 复杂渐变          # 可选，不希望出现的东西
+rules:                                       # 可选，给扩写模型和质检看的规则
+  - 头身比：所有角色统一为2.5头身，头的高度约占全身的四成
+  - 线条：全部用深褐色勾线，外轮廓线粗，内部结构线细一半
 ```
 
-完整示例：`examples/style_cards/guochao.yaml`。
+完整示例：`examples/style_cards/sanguo_chibi.yaml`，是《三国守御录》项目实际在用的风格卡。
+
+规则要写成能逐条对照的具体标准（线条多粗、明暗几层、眼睛怎么画）。"干净""通透"这类宽泛的说法，模型每次理解都不一样，同一套素材的画风就会跑偏。
 
 ### 2. 参考图：统一画风（可选）
 
@@ -96,25 +99,27 @@ rules:                            # 可选，给扩写模型看的规则
 
 参考图里的内容（兵器、姿势）容易被带进新图。只想借画风时，用不带特定道具的标准图，并在描述里写明"只参考画风"。
 
+示例：`examples/refs/` 下有五张配套的标准风格图（年轻武将、年轻女子、年长文官、士兵、粮仓），都不拿兵器，可以直接写进 `paths`，例如 `@repo/examples/refs/warrior.png`。做一套新画风时也建议照这个办法：先不带参考图出一张最满意的，再拿它当参考出其余几张，凑成一组内容不同、画风一致的标准图。
+
 ### 3. 提示词扩写：写要什么
 
 两种写法，任选其一：
 
-- **直接写**：在 `brief` 里用大白话写一两句，例如"一枚国潮风铜钱图标"。
+- **直接写**：在 `brief` 里用大白话写一两句，例如"一座圆筒形的茅草顶小粮仓"。
 - **从描述清单里选**：把一批素材的描述写在一份 `.yaml` 里，把它拖到「提示词扩写」节点上（或在 `briefs_path` 里填路径），然后点 `item` 选一项。选中后这一项的描述会填进 `brief`，「保存资产」的文件名改成这一项的 `id`，上一项留下的修订意见会被清空。填进来的描述还可以接着改，出图以 `brief` 里的文字为准。
 
 ```yaml
 asset_type: character               # 可选：整份清单默认的素材种类
 prefix: 全身入画，四周留出明显空白。   # 可选：每条描述前面都加的公共文字
 items:
-  - id: guanyu                      # 用作保存的文件名
-    brief: 关羽，绿袍金甲，长须，手持青龙偃月刀。
-  - id: arrow_tower
-    brief: 木制箭塔，塔顶有垛口。
+  - id: warrior                     # 用作保存的文件名
+    brief: 无名的年轻男性武将，天蓝色战袍配银白色札甲，双手空着，端正的正面站姿。
+  - id: granary
+    brief: 一座小粮仓，圆筒形的夯土墙，圆锥形的茅草屋顶。
     asset_type: prop                # 可选：这一项单独指定
 ```
 
-完整示例：`examples/briefs/demo.yaml`。
+完整示例：`examples/briefs/demo.yaml`，里面是出 `examples/refs/` 那五张标准风格图用的完整描述，可以对照着看一条好用的描述有多具体。
 
 `asset_type` 决定构图：`icon`、`prop`、`character`、`ui_element` 会要求主体居中、背景干净；`background`、`illustration` 铺满画面。
 
@@ -226,11 +231,14 @@ ga batch resume <批次目录> --budget 5            # 中断或超预算后继�
 
 ## 示例文件
 
+风格卡、描述清单和标准风格图是配套的一组，取自三国题材塔防游戏《三国守御录》：用这张风格卡加清单里的描述，出的就是那五张图。
+
 | 文件 | 是什么 | 用在哪 |
 |---|---|---|
 | `config/config.example.yaml` | 配置示例，每项有注释 | 复制成 `~/.game_art/config.yaml` |
-| `examples/style_cards/guochao.yaml` | 风格卡 | 「风格卡」节点 |
+| `examples/style_cards/sanguo_chibi.yaml` | 风格卡 | 「风格卡」节点 |
 | `examples/briefs/demo.yaml` | 描述清单 | 「提示词扩写」节点的 `briefs_path` |
+| `examples/refs/*.png` | 五张标准风格图 | 「参考图」节点 |
 | `examples/layouts/demo_tile.yaml` | 合成版式 | 「模板合成」节点 |
 | `examples/manifests/smoke.yaml` | 批量清单 | `ga batch start` |
 

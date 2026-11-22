@@ -22,7 +22,7 @@ JSON = dict[str, Any]
 
 runner = CliRunner()
 WF = REPO_ROOT / "workflows" / "text_to_asset.json"
-CARD = REPO_ROOT / "examples" / "style_cards" / "guochao.yaml"
+CARD = REPO_ROOT / "examples" / "style_cards" / "sanguo_chibi.yaml"
 
 
 class FakeClient:

@@ -71,7 +71,7 @@ def ref_image(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def made_asset(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """链路 1：文案 → 透明底资源。后面的合成步骤复用它。"""
     out = tmp_path_factory.mktemp("t2a")
-    res = ga("run", str(REPO / "workflows/text_to_asset.json"), "--set", "expand.brief=一枚国潮风铜钱图标",
+    res = ga("run", str(REPO / "workflows/text_to_asset.json"), "--set", "expand.brief=一座圆筒形的茅草顶小粮仓",
              "--set", "gen.n=1", "--out", str(out))
     assert res["ok"] and res["files"]
     _assert_asset(res["files"], transparent=True)
@@ -99,7 +99,7 @@ def test_batch_smoke(tmp_path: Path) -> None:
     assert st["stage"] == "awaiting_selection", st
     assert Path(st["sheet_path"]).is_file()
     ids = [i["id"] for i in st["items"]]
-    assert ids == ["coin", "cloud", "lantern"]
+    assert ids == ["warrior", "lady", "granary"]
     # 每项挑第一个可选编号（status 里 numbers 是全局编号）
     first: dict[str, int] = {}
     for n in st["numbers"]:

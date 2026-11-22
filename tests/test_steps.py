@@ -119,7 +119,7 @@ def test_style_card_bad_file(tmp_path: Path) -> None:
 
 
 def test_example_style_card_loads() -> None:
-    s = load_style_card(ROOT / "examples" / "style_cards" / "guochao.yaml")
+    s = load_style_card(ROOT / "examples" / "style_cards" / "sanguo_chibi.yaml")
     assert s.name and s.palette and s.rules
 
 

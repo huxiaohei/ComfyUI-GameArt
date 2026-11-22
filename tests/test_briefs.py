@@ -10,16 +10,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_example_briefs_load() -> None:
     b = load_briefs(ROOT / "examples/briefs/demo.yaml")
-    assert [i.id for i in b.items] == ["coin", "cloud", "lantern"] and b.asset_type == "icon"
-    assert b.full_brief(b.find("coin")).startswith("主体居中") and b.full_brief(b.find("coin")).endswith("正面视角。")
-    assert b.find("lantern").asset_type == "prop" and b.find("coin").asset_type is None
+    assert [i.id for i in b.items] == ["warrior", "lady", "elder", "soldier", "granary"]
+    assert b.asset_type == "character" and b.prefix == ""
+    assert b.find("granary").asset_type == "prop" and b.find("warrior").asset_type is None
+    assert b.full_brief(b.find("warrior")).startswith("无名的年轻男性武将")
+    # 示例是配套的：清单里的每一项都有对应的标准风格图
+    for item in b.items:
+        assert (ROOT / "examples/refs" / f"{item.id}.png").is_file()
 
 
 def test_batch_manifest_is_also_a_brief_list() -> None:
     """批量清单里也是 items: [{id, brief}]，多出来的字段忽略，可以直接当描述清单用。"""
     b = load_briefs(ROOT / "examples/manifests/smoke.yaml")
-    assert [i.id for i in b.items] == ["coin", "cloud", "lantern"] and b.prefix == ""
-    assert b.full_brief(b.items[0]) == "铜钱图标，方孔圆钱，金铜色，正面视角"
+    assert [i.id for i in b.items] == ["warrior", "lady", "granary"] and b.prefix == ""
+    assert b.full_brief(b.items[0]).startswith("无名的年轻男性武将")
 
 
 def test_find_unknown_item() -> None:

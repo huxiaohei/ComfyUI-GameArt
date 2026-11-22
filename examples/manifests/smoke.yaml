@@ -1,19 +1,20 @@
-# 冒烟批次：3 个国潮小资产，每项 2 张候选，预算 2.0。
+# 冒烟批次：《三国守御录》的 3 张标准风格图，每项 2 张候选，预算 2.0。
 # 运行：ga batch start examples/manifests/smoke.yaml
 batch_id: smoke
 workflow: ../../workflows/text_to_asset.json
-style_card: ../style_cards/guochao.yaml
+style_card: ../style_cards/sanguo_chibi.yaml
 candidates: 2
 qc_threshold: 7.0
 budget: 2.0
 defaults:
   gen.size: 1024x1024
+  expand.asset_type: character
 items:
-  - id: coin
-    brief: 铜钱图标，方孔圆钱，金铜色，正面视角
-  - id: cloud
-    brief: 祥云纹样，单朵卷云，可平铺装饰
-  - id: lantern
-    brief: 灯笼道具，红色圆灯笼，金色流苏
+  - id: warrior
+    brief: 无名的年轻男性武将，Q版全身立像，天蓝色战袍配银白色札甲，束发戴银色小冠，双手空着自然垂在身体两侧，端正的正面站姿
+  - id: lady
+    brief: 无名的年轻女子，Q版全身立像，橙红色襦裙配米白色披帛，双环髻上插一支木簪，双手在身前交叠，端正的正面站姿
+  - id: granary
+    brief: 一座小粮仓，圆筒形的夯土墙，圆锥形的茅草屋顶，一扇小木门，门边靠着两个粮袋，俯视3/4视角
     sets:
       expand.asset_type: prop

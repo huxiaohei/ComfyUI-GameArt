@@ -67,7 +67,7 @@ def test_smoke_manifest_loads() -> None:
     m = load_manifest(REPO_ROOT / "examples" / "manifests" / "smoke.yaml")
     assert len(m.items) == 3 and m.candidates == 2 and m.budget == 2.0
     assert m.workflow == REPO_ROOT / "workflows" / "text_to_asset.json" and m.workflow.is_file()
-    assert m.style_card == REPO_ROOT / "examples" / "style_cards" / "guochao.yaml" and m.style_card.is_file()
+    assert m.style_card == REPO_ROOT / "examples" / "style_cards" / "sanguo_chibi.yaml" and m.style_card.is_file()
 
 
 def test_manifest_id_with_numeric_suffix_explained(tmp_path: Path) -> None:

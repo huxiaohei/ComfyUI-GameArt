@@ -27,7 +27,7 @@
   "style": {
     "class_type": "GAStyleCard",
     "inputs": {
-      "path": "@repo/examples/style_cards/guochao.yaml"
+      "path": "@repo/examples/style_cards/sanguo_chibi.yaml"
     },
     "_meta": {
       "title": "风格卡"

@@ -337,7 +337,7 @@ def test_briefs_route_helper(tmp_path: pathlib.Path) -> None:
     f.write_text(text, encoding="utf-8")
     assert routes.briefs_items(path=f" {f} ") == want
     assert [i["id"] for i in routes.briefs_items(path="@repo/examples/briefs/demo.yaml")["items"]] == [
-        "coin", "cloud", "lantern"]
+        "warrior", "lady", "elder", "soldier", "granary"]
     with pytest.raises(InputError, match="没有填写"):
         routes.briefs_items()
     with pytest.raises(InputError, match="不是一份描述清单"):
@@ -976,8 +976,8 @@ def test_style_card_node_dropped_file_marker(tmp_path: Path) -> None:
 def test_style_card_text_route_helper(tmp_path: pathlib.Path) -> None:
     from comfy_nodes import WEB_DIRECTORY, routes
 
-    text = routes.style_card_text("@repo/examples/style_cards/guochao.yaml")
-    assert "国潮插画风" in text and "palette" in text
+    text = routes.style_card_text("@repo/examples/style_cards/sanguo_chibi.yaml")
+    assert "三国守御录" in text and "palette" in text
     # 不是通用读文件口：只读合法的 .yaml 风格卡
     secret = tmp_path / "secret.txt"
     secret.write_text("name: a\ndescription: b\n", encoding="utf-8")

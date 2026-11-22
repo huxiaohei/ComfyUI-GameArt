@@ -6,7 +6,7 @@
 
 - **README 只写怎么用**，控制在 400 行以内，不写实现细节。
 - **实现原理、代码导读、扩展方法写在本文件。**
-- 每个功能在 `examples/` 下保留一份对应的配置或描述示例（配置、风格卡、描述清单、合成版式、批量清单），README 的"示例文件"表里要列出来。
+- 每个功能在 `examples/` 下保留一份对应的配置或描述示例（配置、风格卡、描述清单、标准风格图、合成版式、批量清单）。风格卡、描述清单和标准风格图是配套的一组，取自《三国守御录》项目的 `art/style/`，那边定稿有变化时这里要跟着换，README 的"示例文件"表里要列出来。
 - 新增功能时三处一起更新：用法进 README，原理进本文件，示例进 `examples/`。
 
 ## 提交
@@ -220,7 +220,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 | 只看补丁后的工作流 | `ga run <工作流> --set ... --dry-run`（不联网、不花钱） |
 | 批量开始 | `ga batch start <清单.yaml> [--out D]` |
 | 批次状态 | `ga batch status <批次目录>` |
-| 挑图 | `ga batch select <批次目录> 1 3 5` 或 `--item coin=1,2 --item cloud=3` |
+| 挑图 | `ga batch select <批次目录> 1 3 5` 或 `--item warrior=1,2 --item granary=3` |
 | 重跑 | `ga batch rerun <批次目录> <项...> [--brief 新描述]` |
 | 续跑 / 提高预算 | `ga batch resume <批次目录> [--budget 新上限]` |
 
@@ -294,7 +294,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 
 | 用户说 | 做法 |
 |---|---|
-| "给我一枚铜钱图标" | `ga run workflows/text_to_asset.json --set expand.brief=<描述> --set gen.n=1 --json` |
+| "给我一座粮仓" | `ga run workflows/text_to_asset.json --set expand.brief=<描述> --set gen.n=1 --json` |
 | 给了一张图，"做同风格的灯笼" | `ga run workflows/ref_to_asset.json --set ref.paths=<绝对路径> --set expand.brief=<描述> --json` |
 | "先看看风格" | `ga run workflows/style_samples.json --set expand.brief=<描述> --json` |
 | "把这张图做成牌面，字写'萬'" | `ga run workflows/compose_template.json --set 'art.image=@upload{<路径>}' --set 'compose.vars_json={"name":"萬"}' --json` |
@@ -312,7 +312,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 1. `ga batch status <批次目录> --json`，关注 `stage`、`items[].status`、`numbers`、`sheet_path`、`cost`、`budget`。
 2. 把总览图 `sheet_path` 展示给用户，同时用文字列出编号表（编号、所属项、质检分）。图上是全局编号。
 3. 请用户回复编号。每个状态为 `generated` 的项都必须至少选一张。
-4. 提交：`ga batch select <批次目录> 1 3 5`，或按项 `--item coin=1,2 --item cloud=3`。
+4. 提交：`ga batch select <批次目录> 1 3 5`，或按项 `--item warrior=1,2 --item granary=3`。
 5. 退出码 3（`bad_selection`）表示编号不存在、有项漏选或编号不属于该项，状态不会改变。把原因转述给用户，请其重选。
 6. 成功后 `stage=finished`，成品在 `final/`，汇总在 `manifest.json`。告诉用户路径和总费用。
 
