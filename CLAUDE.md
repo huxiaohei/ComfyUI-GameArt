@@ -166,7 +166,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
   - 质检按需：`GAQCReview` 的 `auto_qc`。关掉后结果里 `score` 是 `null`；「质检这张」把 `{"file", "qc": true}` 写进 `fix` 再排队，节点只给那一张调 `qc_score`，输出用 `ExecutionBlocker` 拦住下游（否则保存节点会把同一张图再存一遍），`ui` 的 `mode` 是 `qc`，页面脚本用 `applyQC` 把分数填回原来那一条。
 - **描述清单**：网页没有 yaml 解析器，也拿不到拖入文件的路径，所以清单交给后台的 `/game_art/briefs` 解析。选中一项后脚本把描述写进 `brief` 控件，后台运行时只认 `brief`；`brief` 为空且给了 `item` 时才自己读文件（命令行用法）。
 - **拖入的文件**：拿不到完整路径时，控件里写 `拖入:<文件名>`（Python 和 JS 两边的 `DROPPED_PREFIX` 要一致），内容存在编辑框或 `node.properties` 里。
-- **节点上的自定义面板**用 `node.addDOMWidget`，并设 `serialize: false`，不占 `widgets_values` 的位置，也不随任务发给后台。
+- **节点上的自定义面板**用 `node.addDOMWidget`，并设 `serialize: false`，不占 `widgets_values` 的位置，也不随任务发给后台。面板的宽度要自己卡住：编辑器给面板的宽度取的是 `node.width`，在新版前端里它是"节点大小和内容量出来的大小里较大的那个"，节点被拖窄后会比画出来的节点宽，内容冲出右边。`qc_review.js` 在 `onDraw` 里把面板的 `max-width` 设成 `node.size[0]` 减去两侧边距。
 
 页面脚本里的纯函数（如 `buildState`、`selectedLines`、`mergeFeedback`、`menuLabel`）都 `export` 出来了，改动后可以在浏览器里用假的 `app` / `api` 模块加载脚本做验证。
 

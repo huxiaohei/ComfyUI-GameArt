@@ -21,7 +21,7 @@ const EXPAND_CLASS = "GAPromptExpand";
 const STYLE_ID = "ga-qc-review-style";
 const CSS = `
 .ga-qc { font-size: 12px; line-height: 1.45; color: var(--fg-color, #ddd); padding: 4px 2px; box-sizing: border-box;
-  width: 100%; overflow-y: auto; }
+  width: 100%; min-width: 0; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; }
 .ga-qc-empty { opacity: .6; padding: 8px 4px; }
 .ga-qc-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .ga-qc-thumb { width: 64px; cursor: pointer; border: 2px solid transparent; border-radius: 6px; padding: 2px;
@@ -554,9 +554,20 @@ app.registerExtension({
   nodeCreated(node) {
     if (node.comfyClass !== NODE_CLASS) return;
     const root = el("div", { class: "ga-qc" });
+    // 面板不能比节点宽。编辑器给面板的宽度有时比节点画出来的宽（它按"节点内容量出来的宽度"算，
+    // 节点被拖窄以后两者就对不上），内容会冲出节点右边；这里每次重画时按节点的实际宽度卡住。
+    const PANEL_MARGIN = 10; // 编辑器给这类面板留的边距
+    let lastWidth = 0;
+    const clampWidth = () => {
+      const width = Math.max(120, Math.round((node.size?.[0] ?? 0) - PANEL_MARGIN * 2));
+      if (width === lastWidth) return;
+      lastWidth = width;
+      root.style.maxWidth = `${width}px`;
+    };
     node.addDOMWidget?.("ga_qc_panel", "ga_qc_panel", root, {
       serialize: false, // 状态存在 node.properties 里，不占控件值的位置
       hideOnZoom: false,
+      onDraw: clampWidth,
       getMinHeight: () => Math.min(Math.max(root.scrollHeight, 60), 640),
     });
     const fix = widget(node, "fix");
@@ -567,6 +578,7 @@ app.registerExtension({
       fix.value = "";
     }
     const redraw = () => {
+      clampWidth();
       render(node, root);
       fitNode(node);
     };
