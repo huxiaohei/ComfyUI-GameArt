@@ -38,15 +38,21 @@ profiles:
   # 出图目标用对象写法固定 quality：上游按质档计费，不固定的话默认质档可能更贵，
   # 下面 per_image 的估价就对不上。改质档/尺寸时请同步改 pricing。
   image:
-    - {provider: aihubmix, model: gpt-image-1, params: {quality: medium}}
+    - {provider: aihubmix, model: gpt-image-2.6-sunburst, params: {quality: medium}}
+    - {provider: aihubmix, model: gpt-image-1, params: {quality: medium}}   # 上一个不可用时自动换这个
   image_edit:
-    - {provider: aihubmix, model: gpt-image-1, params: {quality: medium}}
+    - {provider: aihubmix, model: gpt-image-2.6-sunburst, params: {quality: medium}}
+    - {provider: aihubmix, model: gpt-image-1, params: {quality: medium}}   # 上一个不可用时自动换这个
 
 # 估算价格（美元），键为 "provider:model"。只是按配置估算，请以服务商账单为准。
 # 若上游响应带 usage，token 数也会记入账本（配置了 per_1k_* 才会计入费用）。
 pricing:
   "aihubmix:gpt-image-1":
     per_image: 0.04   # 约等于 quality=medium、1024x1024 的单张价
+  # 这个模型实际按 token 计费（OpenAI 官方价：图片输入 $8、图片输出 $30 每百万 token，2026-11 查得），
+  # 这里折成单张的估价：1024x1024 中等画质约 0.04，加上参考图的输入约 0.01。高画质、多张参考图时会更贵。
+  "aihubmix:gpt-image-2.6-sunburst":
+    per_image: 0.05
   "aihubmix:gpt-4o-mini":
     per_1k_input_tokens: 0.00015
     per_1k_output_tokens: 0.0006
