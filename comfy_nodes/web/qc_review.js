@@ -105,17 +105,25 @@ export function buildState(payload) {
   return {
     results, common, current, note: "", threshold: Number(payload?.threshold) || 0, info: payload?.note ?? "",
     target: Number(payload?.target) || DEFAULT_TARGET, // 主体应该占画面高度的几成（节点上的 subject_ratio）
+    tolerance: toleranceOf(payload), // 离目标差多少以内算合适（节点上的 subject_tolerance）；负数 = 不检查主体大小
     lastBatch: results.map((_, i) => i), // 最近一次运行产出的是哪几张；紧接着「保存资产」按这个顺序对号入座
   };
 }
 
-// 主体占比离目标差多少以内算合格（和后台 imaging.SUBJECT_TOLERANCE 一致）
+// 主体占比离目标差多少以内算合适：节点上的 subject_tolerance，后台随结果发过来；旧结果里没有时用默认值。
+// 负数 = 不检查主体大小：不显示占比，也不出现「调整大小」。
 export const DEFAULT_TARGET = 0.7;
 export const SUBJECT_TOLERANCE = 0.03;
+const toleranceOf = (payload) => {
+  const v = Number(payload?.tolerance);
+  return payload?.tolerance === null || payload?.tolerance === undefined || Number.isNaN(v) ? SUBJECT_TOLERANCE : v;
+};
+export const subjectChecked = (state, r) =>
+  (state?.tolerance ?? SUBJECT_TOLERANCE) >= 0 && r?.subject !== null && r?.subject !== undefined;
 // 这张图该调到几成：主体很宽时是它受宽度限制后能到的最大值
 export const subjectGoal = (state, r) => r?.subjectTarget ?? (state?.target || DEFAULT_TARGET);
 export const subjectOff = (state, r) =>
-  r?.subject !== null && r?.subject !== undefined && Math.abs(r.subject - subjectGoal(state, r)) > SUBJECT_TOLERANCE;
+  subjectChecked(state, r) && Math.abs(r.subject - subjectGoal(state, r)) > (state?.tolerance ?? SUBJECT_TOLERANCE);
 
 // 「修这张」和「调整大小」的结果：不替换原来的列表，把新图追加在后面并切过去，记下它是从哪一张改来的。
 export function appendFix(state, payload) {
@@ -139,6 +147,7 @@ export function appendFix(state, payload) {
   if (added.length) state.current = state.results.length - 1;
   state.threshold = Number(payload?.threshold) || state.threshold;
   state.target = Number(payload?.target) || state.target;
+  state.tolerance = toleranceOf(payload);
   return state;
 }
 
@@ -387,13 +396,14 @@ function render(node, root) {
   }));
   const target = state.target || DEFAULT_TARGET;
   const pct = (v) => `${Math.round(v * 100)}%`;
-  if (cur.subject !== null && cur.subject !== undefined) {
+  if (subjectChecked(state, cur)) {
     const off = subjectOff(state, cur);
     const goal = subjectGoal(state, cur);
     const wide = goal < target - 0.005; // 受宽度限制，到不了目标
     root.append(el("div", {
       class: off ? "ga-qc-size off" : "ga-qc-size",
-      title: "按图片的透明度直接量出来的，不是模型估的。目标在节点的 subject_ratio 里改。",
+      title: "按图片的透明度直接量出来的，不是模型估的。目标在节点的 subject_ratio 里改，"
+        + "差多少算偏离在 subject_tolerance 里改（填负数就不检查）。",
       text: `主体占画面高度 ${pct(cur.subject)}（目标 ${pct(target)}`
         + (off ? `，偏${cur.subject < goal ? "小" : "大"}，可以点「调整大小」${wide ? `，主体较宽，最多调到 ${pct(goal)}` : ""}`
           : wide ? "；主体较宽，左右已经快到画面边缘，不再放大" : "，合适") + "）",

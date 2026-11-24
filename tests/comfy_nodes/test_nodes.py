@@ -411,8 +411,8 @@ def test_qc_review_lazy_inputs() -> None:
     assert spec["optional"]["meta"][1]["lazy"] and "lazy" not in spec["optional"]["style"][1]
     # 参考图节点不花钱，不用按需读取；新加的开关排在最后，旧工作流里存的参数位置不会错开
     assert "lazy" not in spec["optional"]["refs"][1]
-    assert list(spec["optional"])[-6:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model", "auto_qc",
-                                           "subject_ratio"]
+    assert list(spec["optional"])[-7:] == ["fix_with_refs", "fix_quality", "fix_fidelity", "edit_model", "auto_qc",
+                                           "subject_ratio", "subject_tolerance"]
     assert spec["optional"]["auto_qc"][1]["default"] is True
     assert spec["optional"]["fix_quality"][1]["default"] == "high"
     assert spec["optional"]["fix_fidelity"][1]["default"] == "high"
@@ -567,6 +567,12 @@ def test_qc_review_measures_subject_and_resizes_locally(monkeypatch: pytest.Monk
     (ui,) = out["ui"]["ga_qc"]
     assert ui["results"][0]["subject"] == pytest.approx(0.4) and ui["target"] == pytest.approx(0.7)
     assert ui["results"][0]["subject_target"] == pytest.approx(0.7)
+    assert ui["tolerance"] == pytest.approx(0.03)  # 差多少算偏离：节点上的参数，随结果发给页面
+    spec = nodes.GAQCReview.INPUT_TYPES()["optional"]["subject_tolerance"][1]
+    assert spec["min"] < 0  # 可以填负数：页面据此不再检查主体大小
+    off = nodes.GAQCReview().run(image=image, mask=mask, meta={"brief": "貂蝉"}, auto_qc=False,
+                                 subject_tolerance=-1.0)
+    assert off["ui"]["ga_qc"][0]["tolerance"] == -1.0
     full = ui["results"][0]["full"]
     out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "resize": True}), auto_qc=False)
     assert r.calls == []  # 没有调用模型

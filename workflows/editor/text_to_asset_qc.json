@@ -438,7 +438,7 @@
       ],
       "size": [
         340,
-        586
+        612
       ],
       "flags": {},
       "order": 6,
@@ -564,6 +564,14 @@
           "widget": {
             "name": "subject_ratio"
           }
+        },
+        {
+          "name": "subject_tolerance",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "subject_tolerance"
+          }
         }
       ],
       "outputs": [
@@ -610,7 +618,8 @@
         "high",
         "",
         true,
-        0.7
+        0.7,
+        0.03
       ]
     },
     {
