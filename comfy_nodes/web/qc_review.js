@@ -82,6 +82,8 @@ export function buildState(payload) {
     path: r.path ?? "", // 同一张图的完整路径（质检时的原样）；没有保存记录时「另存这张」用它
     // 主体占画面高度的几成（0 到 1），后台按透明度量的；不带透明底的图量不出来，是 null
     subject: r.subject === null || r.subject === undefined ? null : Number(r.subject),
+    // 这张图调整后实际能到几成：一般等于目标；主体很宽时受宽度限制会小一些。旧结果里没有，按目标算
+    subjectTarget: r.subject_target === null || r.subject_target === undefined ? null : Number(r.subject_target),
     saved: null, // 「保存资产」把这张图存成了哪个文件：{ image: 预览用的描述, file: 完整路径 }，保存后才有
     issues: (r.issues ?? []).map((i) => ({
       text: String(i.text ?? ""),
@@ -110,8 +112,10 @@ export function buildState(payload) {
 // 主体占比离目标差多少以内算合格（和后台 imaging.SUBJECT_TOLERANCE 一致）
 export const DEFAULT_TARGET = 0.7;
 export const SUBJECT_TOLERANCE = 0.03;
+// 这张图该调到几成：主体很宽时是它受宽度限制后能到的最大值
+export const subjectGoal = (state, r) => r?.subjectTarget ?? (state?.target || DEFAULT_TARGET);
 export const subjectOff = (state, r) =>
-  r?.subject !== null && r?.subject !== undefined && Math.abs(r.subject - (state?.target || DEFAULT_TARGET)) > SUBJECT_TOLERANCE;
+  r?.subject !== null && r?.subject !== undefined && Math.abs(r.subject - subjectGoal(state, r)) > SUBJECT_TOLERANCE;
 
 // 「修这张」和「调整大小」的结果：不替换原来的列表，把新图追加在后面并切过去，记下它是从哪一张改来的。
 export function appendFix(state, payload) {
@@ -385,10 +389,14 @@ function render(node, root) {
   const pct = (v) => `${Math.round(v * 100)}%`;
   if (cur.subject !== null && cur.subject !== undefined) {
     const off = subjectOff(state, cur);
+    const goal = subjectGoal(state, cur);
+    const wide = goal < target - 0.005; // 受宽度限制，到不了目标
     root.append(el("div", {
       class: off ? "ga-qc-size off" : "ga-qc-size",
       title: "按图片的透明度直接量出来的，不是模型估的。目标在节点的 subject_ratio 里改。",
-      text: `主体占画面高度 ${pct(cur.subject)}（目标 ${pct(target)}${off ? `，偏${cur.subject < target ? "小" : "大"}，可以点「调整大小」` : "，合适"}）`,
+      text: `主体占画面高度 ${pct(cur.subject)}（目标 ${pct(target)}`
+        + (off ? `，偏${cur.subject < goal ? "小" : "大"}，可以点「调整大小」${wide ? `，主体较宽，最多调到 ${pct(goal)}` : ""}`
+          : wide ? "；主体较宽，左右已经快到画面边缘，不再放大" : "，合适") + "）",
     }));
   }
   if (unchecked) {
@@ -470,7 +478,7 @@ function render(node, root) {
   });
   const resize = el("button", {
     text: "调整大小",
-    title: `在本机把这张图的主体等比例缩放到占画面高度的 ${pct(target)} 并居中，不调用模型、不花钱。`
+    title: `在本机把这张图的主体等比例缩放到占画面高度的 ${pct(subjectGoal(state, cur))} 并居中，不调用模型、不花钱。`
       + "结果作为新的一张出现在后面，原来那张保留。目标在节点的 subject_ratio 里改。",
     onclick: async () => {
       if (!widget(node, "fix")) {
@@ -481,8 +489,8 @@ function render(node, root) {
         toast("warn", "这张图是旧版本留下的结果，后台没有存原图。请先正常运行一次。");
         return;
       }
-      if (cur.subject / target < 0.77) {
-        toast("warn", `这张图的主体只占 ${pct(cur.subject)}，放大到 ${pct(target)} 要放大三成以上，线条会发虚。照样会调整，但更建议重新生成。`);
+      if (cur.subject / subjectGoal(state, cur) < 0.77) {
+        toast("warn", `这张图的主体只占 ${pct(cur.subject)}，放大到 ${pct(subjectGoal(state, cur))} 要放大三成以上，线条会发虚。照样会调整，但更建议重新生成。`);
       }
       setWidget(node, "fix", JSON.stringify({ file: cur.full, resize: true }));
       try {

@@ -107,6 +107,7 @@ def fit_canvas(img: Image.Image, size: tuple[int, int], align: str = "center") -
 SUBJECT_ALPHA = 96
 DEFAULT_SUBJECT_RATIO = 0.7
 SUBJECT_TOLERANCE = 0.03
+MAX_SUBJECT_WIDTH = 0.9  # 主体最宽占画面宽度的几成；横着拿长兵器的角色先碰到这条线
 
 
 def subject_box(img: Image.Image, threshold: int = SUBJECT_ALPHA) -> tuple[int, int, int, int] | None:
@@ -124,7 +125,19 @@ def subject_ratio(img: Image.Image) -> float | None:
     return None if box is None else (box[3] - box[1]) / img.height
 
 
-def fit_subject(img: Image.Image, ratio: float = DEFAULT_SUBJECT_RATIO, max_width: float = 0.9) -> Image.Image:
+def subject_target(img: Image.Image, ratio: float = DEFAULT_SUBJECT_RATIO,
+                   max_width: float = MAX_SUBJECT_WIDTH) -> float | None:
+    """这张图的主体调整后实际能占到画面高度的几成：一般就是 ratio；
+    主体很宽时受"宽度不超过画面的 max_width"限制，会比 ratio 小。量不出主体时返回 None。"""
+    box = subject_box(img)
+    if box is None:
+        return None
+    by_width = max_width * img.width / (box[2] - box[0]) * (box[3] - box[1]) / img.height
+    return min(ratio, by_width)
+
+
+def fit_subject(img: Image.Image, ratio: float = DEFAULT_SUBJECT_RATIO,
+                max_width: float = MAX_SUBJECT_WIDTH) -> Image.Image:
     """把主体等比例缩放到占画面高度的 ratio，并放到画面正中；画布尺寸不变。
     主体很宽时以宽度不超过画面的 max_width 为准，不让它贴到左右两边。
     纯本机处理，不调模型。放大超过三成左右线条会发虚，那种情况应该重新出图。

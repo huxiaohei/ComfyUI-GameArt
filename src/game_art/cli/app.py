@@ -348,8 +348,9 @@ def fit_file(path: Path, ratio: float, tolerance: float, backup: bool, dry_run: 
     if before is None:
         row["reason"] = "没有透明底，量不出主体"
         return row
-    if abs(before - ratio) <= tolerance:
-        row["reason"] = "已经合适"
+    goal = imaging.subject_target(img, ratio) or ratio
+    if abs(before - goal) <= tolerance:
+        row["reason"] = "已经合适" if goal >= ratio - 0.005 else "主体较宽，左右已经快到画面边缘"
         return row
     fitted = imaging.fit_subject(img, ratio)
     row.update(after=imaging.subject_ratio(fitted), action="would_fit" if dry_run else "fit")

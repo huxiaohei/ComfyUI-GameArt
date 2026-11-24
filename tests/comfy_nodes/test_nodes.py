@@ -566,6 +566,7 @@ def test_qc_review_measures_subject_and_resizes_locally(monkeypatch: pytest.Monk
     out = nodes.GAQCReview().run(image=image, mask=mask, meta={"brief": "貂蝉", "tag": "b/1"}, auto_qc=False)
     (ui,) = out["ui"]["ga_qc"]
     assert ui["results"][0]["subject"] == pytest.approx(0.4) and ui["target"] == pytest.approx(0.7)
+    assert ui["results"][0]["subject_target"] == pytest.approx(0.7)
     full = ui["results"][0]["full"]
     out = nodes.GAQCReview().run(fix=json.dumps({"file": full, "resize": True}), auto_qc=False)
     assert r.calls == []  # 没有调用模型

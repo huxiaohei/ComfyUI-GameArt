@@ -221,7 +221,7 @@ class GAQCReview:
                                             "step": 0.05, "tooltip": (
                     "主体应该占画面高度的几成，默认 0.7。节点上会显示每张图实测的占比（按透明度量，不问模型）；"
                     "点「调整大小」时，在本机把选中那张图的主体等比例缩放到这个占比并居中，不花钱。"
-                    "只对带透明底的图有效。放大超过三成左右线条会发虚，那种情况重新生成更好。")}),
+                    "只对带透明底的图有效。主体很宽（横着拿长兵器）时以宽度不超过画面的九成为准，高度会到不了这个占比。放大超过三成左右线条会发虚，那种情况重新生成更好。")}),
             },
         }
 
@@ -257,7 +257,8 @@ class GAQCReview:
             note = f"主体占画面高度从 {before:.0%} 调到了 {after:.0%}（本机处理，没有调用模型）"
             ui = {"threshold": threshold, "note": "", "mode": "fix", "base": job.file, "model": "", "common": [],
                   "resized": True, "target": subject_ratio,
-                  "results": [{"score": None, "passed": None, **files[0], "subject": after, "issues": []}]}
+                  "results": [{"score": None, "passed": None, **files[0], "subject": after,
+                               "subject_target": imaging.subject_target(fitted, subject_ratio), "issues": []}]}
             return {"ui": {"ga_qc": [ui]}, "result": (out_image, out_mask, out_meta, note)}
         if job is not None and job.only_qc:
             # 只给已经出好的某一张图补一次质检：不出图、不改图，也不往下游送东西
@@ -350,6 +351,8 @@ class GAQCReview:
               # subject：主体占画面高度的几成，程序量的；不带透明底的图量不出来，是 null
               "results": [{"score": r.score if r else None, "passed": r.passed if r else None, **f,
                            "subject": imaging.subject_ratio(im),
+                           # 这张图调整后实际能到几成：主体很宽时受宽度限制，到不了目标
+                           "subject_target": imaging.subject_target(im, subject_ratio),
                            "issues": [d.model_dump() for d in r.details] if r else []}
                           for r, f, im in zip(results, files, pils, strict=True)],
               "common": [c.model_dump() for c in shared]}

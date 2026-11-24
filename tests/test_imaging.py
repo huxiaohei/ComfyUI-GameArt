@@ -20,6 +20,7 @@ from game_art.imaging import (
     remove_background,
     subject_box,
     subject_ratio,
+    subject_target,
     tile_preview,
     to_data_url,
     to_png_bytes,
@@ -215,6 +216,14 @@ def test_fit_subject_wide_subject_limited_by_width() -> None:
     out = fit_subject(_figure((100, 100), (10, 45, 90, 55)), 0.7)  # 很宽很扁：按高度放大会冲出左右
     left, _top, right, _bottom = subject_box(out) or (0, 0, 0, 0)
     assert (right - left) / 100 == pytest.approx(0.9, abs=0.03)
+
+
+def test_subject_target_is_ratio_unless_width_limited() -> None:
+    assert subject_target(_figure((100, 200), (40, 80, 60, 120)), 0.7) == pytest.approx(0.7)
+    wide = _figure((100, 100), (5, 20, 95, 80))  # 宽占九成、高占六成：再放大就冲出左右
+    assert subject_target(wide, 0.7) == pytest.approx(0.6)
+    assert subject_ratio(fit_subject(wide, 0.7)) == pytest.approx(0.6, abs=0.02)  # 调整后也就是这么大
+    assert subject_target(Image.new("RGB", (10, 10), "red")) is None
 
 
 def test_fit_subject_rejects_opaque() -> None:
