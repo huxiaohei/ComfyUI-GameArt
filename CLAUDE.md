@@ -28,8 +28,8 @@ uv run ruff check
 
 ## 改动时要注意
 
-- `workflows/*.json` 是给命令行和批量流程用的 API 格式；`workflows/editor/*.json` 是由它们生成的编辑器格式（`ga comfy export-editor`）。改了节点的输入输出或 API 工作流，要重新生成编辑器格式。
-- ComfyUI 侧边栏里的 `game_art/` 就是链接到 `workflows/editor/` 的。不要把带具体项目内容的工作现场提交进来。
+- `workflows/*.json` 是给命令行和批量流程用的 API 格式；`workflows/editor/*.json` 是由它们生成的编辑器格式（`ga comfy export-editor`），只在本机生成、不入库（已写进 `.gitignore`）。改了节点的输入输出或 API 工作流，要重新生成编辑器格式。
+- ComfyUI 侧边栏里的 `game_art/` 就是链接到 `workflows/editor/` 的，使用者在编辑器里存的工作现场也会落在这里，所以整个目录不提交。
 - 改了 Python 代码要重启 ComfyUI 才生效；改了 `comfy_nodes/web/` 下的脚本刷新页面即可。改完要提醒使用者。
 - 节点的说明文字（`DESCRIPTION`、`tooltip`）是写给不懂技术的美术和策划看的，用大白话。
 - 新增节点：在 `comfy_nodes/nodes/` 新建文件，并加进 `comfy_nodes/nodes/__init__.py` 的注册表；用法写进 README，对应的核心代码登记到本文件的"节点对应的核心代码"表里。

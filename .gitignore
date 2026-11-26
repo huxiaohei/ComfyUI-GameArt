@@ -7,3 +7,5 @@ outputs/
 # 字体文件体积大，不随仓库分发；下载方法见 examples/fonts/README.md
 examples/fonts/*
 !examples/fonts/README.md
+# 编辑器格式工作流在本机由 ga comfy export-editor 生成，不入库
+workflows/editor/
