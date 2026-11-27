@@ -69,20 +69,42 @@ def _safe_name(name: str) -> str:
     return name
 
 
+def _checked_source(src: str) -> tuple[Path, Path]:
+    """只认本节点保存出来的图：必须是 .png，旁边要有同名 .json。返回（图片，记录）。"""
+    source = Path(src)
+    side = source.with_suffix(".json")
+    if source.suffix.lower() != ".png" or not source.is_file() or not side.is_file():
+        raise InputError("bad_asset", (
+            f"找不到要另存的图片或它的记录文件：{source}（图片可能已被移走或删除，请重新运行一次再另存）"))
+    return source, side
+
+
+def _stem(name: str) -> str:
+    name = _safe_name(name)
+    return (name[:-4] or "asset") if name.lower().endswith(".png") else name
+
+
+def _copy_to(source: Path, side: Path, dest: Path) -> None:
+    """把图片和记录写到 dest（.png）和它旁边的 .json，记录里的文件名跟着改。"""
+    try:
+        data = source.read_bytes()
+        record = json.loads(side.read_text(encoding="utf-8"))
+        if isinstance(record, dict):
+            record.update(file=dest.name, copied_from=str(source))
+        dest.write_bytes(data)
+        dest.with_suffix(".json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, ValueError) as e:
+        raise InputError("copy_failed", f"另存失败：{e}") from e
+
+
 def copy_asset(src: str, dest_dir: str, name: str) -> Path:
     """把一张已保存的资产另存到 dest_dir，文件名是 <name>.png，同名的 .json 记录一起带过去。
 
     只认本节点保存出来的图：必须是 .png，旁边要有同名 .json。目标位置已有同名文件时不覆盖，
     改用 <name>_2.png、<name>_3.png……返回实际写入的 PNG 路径。
     """
-    source = Path(src)
-    side = source.with_suffix(".json")
-    if source.suffix.lower() != ".png" or not source.is_file() or not side.is_file():
-        raise InputError("bad_asset", (
-            f"找不到要另存的图片或它的记录文件：{source}（图片可能已被移走或删除，请重新运行一次再另存）"))
-    name = _safe_name(name)
-    if name.lower().endswith(".png"):
-        name = name[:-4] or "asset"
+    source, side = _checked_source(src)
+    name = _stem(name)
     target_dir = Path(dest_dir).expanduser()
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -93,15 +115,40 @@ def copy_asset(src: str, dest_dir: str, name: str) -> Path:
         n += 1
         stem = f"{name}_{n}"
     dest = target_dir / f"{stem}.png"
-    try:
-        dest.write_bytes(source.read_bytes())
-        record = json.loads(side.read_text(encoding="utf-8"))
-        if isinstance(record, dict):
-            record.update(file=dest.name, copied_from=str(source))
-        dest.with_suffix(".json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    except (OSError, ValueError) as e:
-        raise InputError("copy_failed", f"另存失败：{e}") from e
+    _copy_to(source, side, dest)
     return dest
+
+
+def save_dir(subfolder: str, output_dir: str | Path) -> Path:
+    """subfolder 这一栏指的是硬盘上的哪个文件夹：完整路径就是它本身，相对路径在输出目录下面。"""
+    outside = _absolute_dir(subfolder)
+    if outside is not None:
+        return outside.resolve()
+    root = Path(output_dir).resolve()
+    target = (root / _safe_subfolder(subfolder)).resolve()
+    if root != target and root not in target.parents:
+        raise InputError("bad_subfolder", f"保存位置不合法：{subfolder!r}（越出了输出目录）")
+    return target
+
+
+def finalize_asset(src: str, subfolder: str, name: str, output_dir: str | Path) -> tuple[Path, bool]:
+    """定稿：把一张已保存的资产存成 subfolder 里的 <name>.png（不带编号），记录文件一起带过去。
+
+    和 copy_asset 的区别：位置就是节点上填的 subfolder，不用再选；已有同名的定稿时直接替换，
+    因为定稿的文件名要固定，游戏项目才好引用。返回（写入的 PNG 路径，是否替换了旧的）。
+    """
+    source, side = _checked_source(src)
+    target_dir = save_dir(subfolder, output_dir)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise InputError("bad_subfolder", f"无法使用这个文件夹 {target_dir}：{e}") from e
+    dest = target_dir / f"{_stem(name)}.png"
+    if dest.resolve() == source.resolve():
+        raise InputError("bad_asset", f"这张图已经是定稿了：{dest}")
+    replaced = dest.exists()
+    _copy_to(source, side, dest)
+    return dest, replaced
 
 
 class GASaveAsset:

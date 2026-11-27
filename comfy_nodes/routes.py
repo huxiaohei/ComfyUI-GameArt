@@ -2,7 +2,7 @@
 - 让「风格卡」节点能把文件内容读进编辑框；
 - 让「提示词扩写」节点能读描述清单（yaml），列出里面的每一项供选择；
 - 弹出系统自带的"选择文件夹"窗口（网页拿不到硬盘上的完整路径，只能让本机的 ComfyUI 进程代劳）；
-- 把「保存资产」节点上选中的一张图另存到选定的文件夹。
+- 把「保存资产」节点上选中的一张图另存到选定的文件夹，或者直接存成定稿（不弹窗，存到节点的 subfolder）。
 """
 from __future__ import annotations
 
@@ -17,11 +17,12 @@ from game_art.errors import GAError, InputError
 from game_art.paths import resolve_repo_path
 from game_art.style import load_style_card
 
-from .nodes.save_asset import copy_asset
+from .nodes.save_asset import copy_asset, finalize_asset
 
 ROUTE = "/game_art/style_card"
 CHOOSE_FOLDER_ROUTE = "/game_art/choose_folder"
 SAVE_AS_ROUTE = "/game_art/save_as"
+SAVE_FINAL_ROUTE = "/game_art/save_final"
 BRIEFS_ROUTE = "/game_art/briefs"
 _LAST_SAVE_AS: dict[str, str] = {}  # 上次「另存」选的文件夹，下次弹窗从这里开始（只在这次 ComfyUI 运行期间记着）
 _TK_SCRIPT = (
@@ -163,7 +164,23 @@ def register() -> bool:
         except ValueError:
             return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
 
+    async def save_final_handler(request: Any) -> Any:
+        """「保存为定稿」：不弹窗，把这张图和它的记录存成节点 subfolder 里的 <name>.png，已有的定稿直接替换。"""
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise InputError("bad_asset", "请求内容格式不对")
+            output_dir = importlib.import_module("folder_paths").get_output_directory()
+            dest, replaced = finalize_asset(str(body.get("path") or ""), str(body.get("subfolder") or ""),
+                                            str(body.get("name") or ""), output_dir)
+            return web.json_response({"saved": str(dest), "replaced": replaced})
+        except GAError as e:
+            return web.json_response({"error": e.message}, status=400)
+        except ValueError:
+            return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
+
     instance.routes.post(SAVE_AS_ROUTE)(save_as_handler)
+    instance.routes.post(SAVE_FINAL_ROUTE)(save_final_handler)
     instance.routes.get(ROUTE)(handler)
     instance.routes.post(BRIEFS_ROUTE)(briefs_handler)
     instance.routes.post(CHOOSE_FOLDER_ROUTE)(choose_folder_handler)

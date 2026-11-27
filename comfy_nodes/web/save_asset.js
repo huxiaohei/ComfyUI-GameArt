@@ -3,6 +3,8 @@
 //   （网页自己拿不到硬盘上的完整路径，所以要由后台代劳；同理，把文件夹拖进来也没法知道它在哪。）
 //   按住 Shift 再点，是原来的手动输入框。
 // - 把文件夹拖到节点上：提示改用点击选择。
+// - 「保存为定稿」按钮：定稿用，一键完成。先在节点的预览里点一下要的那张图，再点按钮，后台把这张图和它的 .json
+//   记录存成 subfolder 里的 <name>.png（不带编号），不弹窗；已有同名的定稿时直接替换。
 // - 「另存选中的图…」按钮：定稿用。先在节点的预览里点一下要的那张图，再点按钮，弹出系统的文件夹选择窗口，
 //   选完后后台把这张图和它的 .json 记录复制过去，文件名是 name 那一栏的名字（不带编号）；已有同名文件时不覆盖，
 //   自动加 _2、_3。节点上有多张图又没选中时，会先弹一个列表让你选是哪一张。
@@ -91,10 +93,54 @@ async function saveAs(node, index) {
   // data.cancelled：在选择窗口里点了取消，什么都不用说
 }
 
-function saveSelected(node, event) {
+// 定稿提示里怎么说：替换了旧的要讲明白
+export const finalMessage = (data) =>
+  data.replaced ? `已保存为定稿（替换了原来的）：${data.saved}` : `已保存为定稿：${data.saved}`;
+
+// 把一张图存成定稿：save 是「保存资产」节点（位置和名字取它上面填的），path 是这张图在硬盘上的完整路径。
+// 成功时返回后台的结果，失败时已经弹过提示，返回 null。
+export async function saveFinal(save, path) {
+  const name = String(widget(save, "name")?.value ?? "").trim() || "asset";
+  const subfolder = String(widget(save, "subfolder")?.value ?? "");
+  let res;
+  try {
+    res = await api.fetchApi("/game_art/save_final", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, name, subfolder }),
+    });
+  } catch (err) {
+    toast("error", `保存定稿失败：${err?.message ?? err}`);
+    return null;
+  }
+  if (res.status === 404 || res.status === 405) {
+    toast("error", "后台还没有「保存为定稿」这个功能，请重启 ComfyUI 后再试。");
+    return null;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    toast("error", `保存定稿失败：后台返回的内容看不懂（状态 ${res.status}）。`);
+    return null;
+  }
+  if (!res.ok || !data.saved) {
+    toast("error", data.error ?? `保存定稿失败（${res.status}）`);
+    return null;
+  }
+  return data;
+}
+
+async function finalize(node, index) {
+  const path = savedFiles(node)[index];
+  if (!path) return;
+  const data = await saveFinal(node, path);
+  if (data) toast("success", finalMessage(data));
+}
+
+// action：对选中的那张图做什么（saveAs 另存 / finalize 定稿）；verb 用在提示里
+function saveSelected(node, event, action = saveAs, verb = "另存") {
   const files = savedFiles(node);
   if (!files.length) {
-    toast("warn", "还没有可以另存的图：请先运行一次。");
+    toast("warn", `还没有可以${verb}的图：请先运行一次。`);
     return;
   }
   if (choosing) {
@@ -103,20 +149,20 @@ function saveSelected(node, event) {
   }
   const run = (index) => {
     choosing = true;
-    saveAs(node, index).finally(() => (choosing = false));
+    action(node, index).finally(() => (choosing = false));
   };
   const picked = Number.isInteger(node.imageIndex) ? node.imageIndex : files.length === 1 ? 0 : -1;
   if (picked >= 0 && picked < files.length) return run(picked);
   // 有多张图又没在预览里选中某一张：列出来让人选
   const LG = globalThis.LiteGraph;
   if (!LG?.ContextMenu) {
-    toast("warn", "节点上有多张图：请先在预览里点一下要另存的那张，再点这个按钮。");
+    toast("warn", `节点上有多张图：请先在预览里点一下要${verb}的那张，再点这个按钮。`);
     return;
   }
   const labels = files.map((f, i) => `第 ${i + 1} 张　${baseName(f)}`);
   new LG.ContextMenu(labels, {
     event,
-    title: "另存哪一张",
+    title: `${verb}哪一张`,
     callback: (label) => {
       const index = labels.indexOf(typeof label === "string" ? label : label?.content);
       if (index >= 0) run(index);
@@ -179,12 +225,17 @@ app.registerExtension({
       node.properties.ga_files = message.ga_files;
       recordOnReview(node, message);
     };
-    const button = node.addWidget("button", "另存选中的图…", null, (_value, _canvas, _node, _pos, event) =>
-      saveSelected(node, event));
     // 按钮只是界面操作，不存进工作流，也不随任务发给后端
-    button.serialize = false;
-    button.options = { ...(button.options ?? {}), serialize: false };
-    button.tooltip = "定稿用：先在预览里点一下要的那张图，再点这里选文件夹，图片和记录会以 name 为文件名复制过去。";
+    const addButton = (label, onClick, tooltip) => {
+      const b = node.addWidget("button", label, null, (_value, _canvas, _node, _pos, event) => onClick(event));
+      b.serialize = false;
+      b.options = { ...(b.options ?? {}), serialize: false };
+      b.tooltip = tooltip;
+      return b;
+    };
+    addButton("保存为定稿", (event) => saveSelected(node, event, finalize, "定稿"),
+      "一键定稿：先在预览里点一下要的那张图，再点这里。图片和记录会存到上面 subfolder 的位置，文件名就是 name（不带编号）；已有同名的定稿会被替换。");
+    addButton("另存选中的图…", (event) => saveSelected(node, event), "要存到别的地方时用：先在预览里点一下要的那张图，再点这里选文件夹，图片和记录会以 name 为文件名复制过去。");
 
     node.onDragOver = (e) => [...(e?.dataTransfer?.items ?? [])].some((item) => item.kind === "file");
     node.onDragDrop = (e) => {

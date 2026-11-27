@@ -14,6 +14,7 @@
 //   点缩略图时，下游「保存资产」节点的预览跟着切到这张图；「另存这张…」把它复制到选定的文件夹。
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { finalMessage, saveFinal } from "./save_asset.js";
 
 const NODE_CLASS = "GAQCReview";
 const SAVE_CLASS = "GASaveAsset";
@@ -295,6 +296,25 @@ async function saveResultAs(node, result) {
   }
 }
 
+// 一键定稿：不弹窗，存到下游「保存资产」节点的 subfolder，文件名是它的 name。
+async function saveResultFinal(node, result) {
+  const save = findSave(node);
+  if (!save) {
+    toast("warn", "后面没有接「保存资产」节点，不知道定稿该存到哪里。请接上，或者用「另存」。");
+    return;
+  }
+  const path = result?.saved?.file || result?.path;
+  if (!path) {
+    toast("warn", "这张图是旧版本留下的结果，后台没有存原图。请先正常运行一次，再保存。");
+    return;
+  }
+  const data = await saveFinal(save, path);
+  if (!data) return;
+  toast("success", result.saved?.file
+    ? finalMessage(data)
+    : `${finalMessage(data)}（这张图没有经过「保存资产」，存的是质检时的原样，没有去背景和清理）`);
+}
+
 // ---------------------------------------------------------------- 找上游的「提示词扩写」
 function findExpand(node) {
   const seen = new Set();
@@ -515,9 +535,18 @@ function render(node, root) {
     if (expand && setWidget(expand, "feedback", "")) toast("info", "已清空「提示词扩写」里的修订意见。");
   } });
   let saving = false;
+  const saveFinalButton = el("button", {
+    text: many ? `第 ${state.current + 1} 张存为定稿` : "保存为定稿",
+    title: "一键定稿：把这张图和它的记录存到「保存资产」节点 subfolder 的位置，文件名用它的 name（不带编号），不用选文件夹；已有同名的定稿会被替换。",
+    onclick: () => {
+      if (saving) return;
+      saving = true;
+      saveResultFinal(node, cur).finally(() => (saving = false));
+    },
+  });
   const saveAs = el("button", {
     text: many ? `另存第 ${state.current + 1} 张…` : "另存这张…",
-    title: "定稿用：选一个文件夹，把这张图和它的记录复制过去，文件名用「保存资产」节点的 name。",
+    title: "要存到别的地方时用：选一个文件夹，把这张图和它的记录复制过去，文件名用「保存资产」节点的 name。",
     onclick: () => {
       if (saving) {
         toast("warn", "选择文件夹的窗口已经打开了，可能被别的窗口挡住，请切过去看看。");
@@ -550,7 +579,7 @@ function render(node, root) {
   // 还没质检的图才显示「质检这张」，排在最前面
   // 「调整大小」只在量得出主体、且占比离目标超出允许范围时显示
   root.append(el("div", { class: "ga-qc-actions" }, [
-    unchecked ? checkThis : null, fixThis, subjectOff(state, cur) ? resize : null, regenerate, saveAs, clear, counter,
+    unchecked ? checkThis : null, fixThis, subjectOff(state, cur) ? resize : null, regenerate, saveFinalButton, saveAs, clear, counter,
   ]));
   refresh();
 }

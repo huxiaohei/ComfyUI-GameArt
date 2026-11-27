@@ -75,7 +75,7 @@ uv run ruff check
 |---|---|---|
 | 命令行 | `src/game_art/cli/app.py` 的 `main` | 每个子命令是一个函数，真正的逻辑在其内部的 `body()` 里，外层 `_guarded()` 把错误统一转成中文提示和退出码 |
 | ComfyUI 加载节点 | `comfy_nodes/__init__.py` | `ga comfy install` 在 `custom_nodes/` 下建符号链接指向 `comfy_nodes/`；这个文件把 `src/` 加进搜索路径，并导出 `NODE_CLASS_MAPPINGS` |
-| 编辑器里的脚本 | `comfy_nodes/web/` | 每个文件服务一个节点，需要后台配合的接口在 `comfy_nodes/routes.py`。`style_card.js`：把风格卡文件读进编辑框、支持拖入。`reference_images.js`：把拖进来的图片变成「加载图像」节点并连线。`prompt_expand.js`：读描述清单、点 `item` 选一项并填进 `brief`。`save_asset.js`：点 `subfolder` 弹系统的文件夹选择窗口；「另存选中的图…」按钮调 `/game_art/save_as`，后台弹窗选文件夹后用 `copy_asset` 把图和记录复制过去（节点运行时在 `ui.ga_files` 里给出每张图的完整路径）。`qc_review.js`：「质检结果」节点上的面板，把勾选的问题写回「提示词扩写」的 `feedback` |
+| 编辑器里的脚本 | `comfy_nodes/web/` | 每个文件服务一个节点，需要后台配合的接口在 `comfy_nodes/routes.py`。`style_card.js`：把风格卡文件读进编辑框、支持拖入。`reference_images.js`：把拖进来的图片变成「加载图像」节点并连线。`prompt_expand.js`：读描述清单、点 `item` 选一项并填进 `brief`。`save_asset.js`：点 `subfolder` 弹系统的文件夹选择窗口；「保存为定稿」按钮调 `/game_art/save_final`，后台不弹窗，用 `finalize_asset` 把图和记录存成 `subfolder` 里的 `<name>.png`，已有的直接替换（`saveFinal` 是导出的，`qc_review.js` 的同名按钮也用它）；「另存选中的图…」按钮调 `/game_art/save_as`，后台弹窗选文件夹后用 `copy_asset` 把图和记录复制过去（节点运行时在 `ui.ga_files` 里给出每张图的完整路径）。`qc_review.js`：「质检结果」节点上的面板，把勾选的问题写回「提示词扩写」的 `feedback` |
 
 **一次 `ga run` 走过的路**（`cli/app.py` 的 `run`）
 
@@ -127,7 +127,7 @@ class GACloudGenerate:
 | `GAQCScore` | `qc_score` | `steps.py`，模板在 `prompts/qc.md` |
 | `GAQCReview` | `qc_score`、`common_issues`；修图时 `fix_instruction`、`router.edit` | `steps.py`，模板在 `prompts/qc.md`、`prompts/common_issues.md`；节点上的面板在 `comfy_nodes/web/qc_review.js` |
 | `GAComposeTemplate` | `compose` | `compose.py` |
-| `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha` | 写文件的逻辑在节点里，清理在 `imaging.py` |
+| `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha`；定稿和另存是 `finalize_asset`、`copy_asset` | 写文件的逻辑在节点里，清理在 `imaging.py` |
 
 节点之间传六种数据：`STRING`、`IMAGE`、`MASK`、`GA_STYLE`（风格卡对象）、`GA_REFS`（参考图列表，每张保留原始尺寸）、`GA_META`（随图流转的元数据字典）。ComfyUI 的 `IMAGE` 不带透明度，所以透明度单独放在 `MASK` 里并排传，约定 `mask = 1 - alpha`；少接一根 `mask` 线，透明背景就丢了。转换代码在 `comfy_nodes/tensors.py`。
 
@@ -158,7 +158,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 - **质检问题回流**：`GAQCReview.run` 返回 `{"ui": {"ga_qc": [...]}, "result": (...)}`，页面脚本在 `onExecuted` 里拿到 `ui` 部分画面板，状态存在 `node.properties.ga_qc`。点「采纳并重新生成」时，脚本顺着输入连线往上找到 `GAPromptExpand`，把勾选的问题追加到它的 `feedback` 控件，再调用 `app.queuePrompt`。
 - **修这张**：`GAQCReview` 的 `image` / `mask` / `meta` 是按需读取的输入（`"lazy": True`）。页面脚本把 `{"file", "notes"}` 写进节点的 `fix` 控件再排队；`check_lazy_status` 看到 `fix` 非空就不向上游要这三个输入，上游的扩写和出图不执行。节点改从临时目录 `game_art_qc/` 取上次存下的原图和记录（每次质检都会存一份）。`fix_instruction`（模板 `prompts/fix.md`）让看图模型**对着这张图**写完整指令：先如实描述要保留的画面，再写具体改动，末尾由代码拼上风格卡的 `positive`。改图请求里原图排第一，`refs` 输入里的标准风格图跟在后面当画风的锚（`fix_with_refs` 可关）。修图的模型、画质、保真度都是节点上的控件（`edit_profile`、`fix_quality`、`fix_fidelity`），作为 `ImageRequest.params` 发出去，优先于配置里给模型写的 `params`；模型不认 `input_fidelity` 时去掉它重试一次。使用者不想为这些事去改配置文件，以后同类的可调项也优先做成节点上的控件。返回的 `ui` 里 `mode` 是 `fix`，脚本据此把新图追加到列表而不是替换。排队后脚本立刻清空 `fix`，所以它只对那一次运行有效。
 - **为什么修图要这样设计**（2026-11 实测关羽连修三轮的教训）：只发"原图 + 改动清单"时，指令里没有画风，质检意见里又混着"太卡通""细节太少"这类和 Q 版风格相反的话，每修一轮画风就往写实偏一点，而且下一轮是在已经偏了的图上继续改。所以现在：指令带完整的保留描述和风格卡；带画风锚；质检的问题分 `detail` / `layout`，页面上只把细节类带进修图且一次最多 3 条（`MAX_FIX_ISSUES`）；`qc.md` 明确"风格卡规定的画风特征不是问题"。给节点加可选输入时排在 `optional` 的最后，旧工作流里存的控件值才不会错位。
-- **质检结果和保存资产的联动**：两个节点之间没有回传的连线，靠页面脚本对号入座。`qc_review.js` 在每次运行后把"这次产出的是第几张"记在 `state.lastBatch`；紧接着 `save_asset.js` 收到保存结果（`ui.images` 和 `ui.ga_files`），顺着输入连线找到上游的质检结果节点，按顺序把文件记到对应那几条的 `saved` 上（张数对不上就不记）。之后点缩略图时，`showInSave` 把 `app.nodeOutputs[保存节点 id]` 换成这张图，让编辑器重画预览；「另存这张…」调 `/game_art/save_as`。没有 `saved` 的图退回用质检时存在临时目录里的原样（`path`）。
+- **质检结果和保存资产的联动**：两个节点之间没有回传的连线，靠页面脚本对号入座。`qc_review.js` 在每次运行后把"这次产出的是第几张"记在 `state.lastBatch`；紧接着 `save_asset.js` 收到保存结果（`ui.images` 和 `ui.ga_files`），顺着输入连线找到上游的质检结果节点，按顺序把文件记到对应那几条的 `saved` 上（张数对不上就不记）。之后点缩略图时，`showInSave` 把 `app.nodeOutputs[保存节点 id]` 换成这张图，让编辑器重画预览；「保存为定稿」调 `/game_art/save_final`（位置和名字取下游保存节点的 `subfolder` 和 `name`），「另存这张…」调 `/game_art/save_as`。没有 `saved` 的图退回用质检时存在临时目录里的原样（`path`）。
 - **省钱的三个开关**（2026-11 按账本实测加的：带参考图出一张图，输入约占费用的两到三成；质检每次约 1 美分）：
   - 参考图缩小：`GAReferenceImages` 的 `shrink` / `shrink_size`，在节点里用 `imaging.shrink_to` 缩到长边 512 再输出，下游拿到的就是小图。「修这张」的底图取自质检节点自己存的原图，不受影响。
   - 扩写复用：`GAPromptExpand` 的 `reuse`。`steps.expand_key` 把描述、素材种类、风格卡内容、参考图描述、整理后的修订意见、模型组算成指纹，命中时直接返回 `<data_dir>/expand_cache.json` 里存的提示词（最多 300 条）。关着 `reuse` 时仍会写入，所以重新打开后沿用的是最近一版。

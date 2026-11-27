@@ -665,6 +665,37 @@ def test_save_asset_reports_files_and_copy(out_dir: pathlib.Path, tmp_path: path
         copy_asset(files[0], str(dest), "../x")
 
 
+def test_save_asset_finalize(out_dir: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """「保存为定稿」：不用选文件夹，直接存成 subfolder 里不带编号的 <name>.png，已有的定稿直接替换。"""
+    from comfy_nodes.nodes.save_asset import finalize_asset
+    res = nodes.GASaveAsset().save(image=torch.rand(2, 4, 4, 3), subfolder="q", name="guanyu", meta={"prompt": "p"})
+    files = res["ui"]["ga_files"]
+    dest, replaced = finalize_asset(files[0], "q", "guanyu", out_dir)
+    assert dest == (out_dir / "q" / "guanyu.png").resolve() and not replaced
+    assert dest.read_bytes() == Path(files[0]).read_bytes()
+    record = json.loads(dest.with_suffix(".json").read_text())
+    assert record["prompt"] == "p" and record["file"] == "guanyu.png" and record["copied_from"] == files[0]
+    # 改主意了，换另一张当定稿：替换掉，不会多出 guanyu_2.png
+    dest, replaced = finalize_asset(files[1], "q", "guanyu.png", out_dir)
+    assert replaced and dest.read_bytes() == Path(files[1]).read_bytes()
+    assert not (out_dir / "q" / "guanyu_2.png").exists()
+    # 带编号的候选图原样留着
+    assert Path(files[0]).is_file() and Path(files[1]).is_file()
+    # subfolder 写的是完整路径：存到那里，文件夹不存在会自动创建
+    outside = tmp_path / "project" / "art"
+    dest, replaced = finalize_asset(files[0], str(outside), "guanyu", out_dir)
+    assert dest == (outside / "guanyu.png").resolve() and not replaced and (outside / "guanyu.json").is_file()
+    # 把定稿自己再存成定稿：没有意义，说清楚
+    with pytest.raises(InputError, match="已经是定稿"):
+        finalize_asset(str(dest), str(outside), "guanyu", out_dir)
+    with pytest.raises(InputError, match="保存位置不合法"):
+        finalize_asset(files[0], "../x", "guanyu", out_dir)
+    with pytest.raises(InputError, match="名称不合法"):
+        finalize_asset(files[0], "q", "a/b", out_dir)
+    with pytest.raises(InputError, match="找不到要另存的图片"):
+        finalize_asset(str(tmp_path / "missing.png"), "q", "guanyu", out_dir)
+
+
 def test_choose_folder_starts_at_last_location(tmp_path: pathlib.Path) -> None:
     from comfy_nodes import routes
     mac = routes.choose_folder_command("另存", platform="darwin", start=str(tmp_path))
