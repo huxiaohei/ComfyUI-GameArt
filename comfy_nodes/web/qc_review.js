@@ -537,7 +537,7 @@ function render(node, root) {
   let saving = false;
   const saveFinalButton = el("button", {
     text: many ? `第 ${state.current + 1} 张存为定稿` : "保存为定稿",
-    title: "一键定稿：把这张图和它的记录存到「保存资产」节点 subfolder 的位置，文件名用它的 name（不带编号），不用选文件夹；已有同名的定稿会被替换。",
+    title: "一键定稿：把这张图和它的记录存到「保存资产」节点 subfolder 的位置，文件名用它的 name（不带编号），不用选文件夹；已有同名的定稿会被替换。「保存资产」节点上打开了「定稿后删除候选图」时，候选图会一并删掉。",
     onclick: () => {
       if (saving) return;
       saving = true;

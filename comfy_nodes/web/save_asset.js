@@ -5,6 +5,8 @@
 // - 把文件夹拖到节点上：提示改用点击选择。
 // - 「保存为定稿」按钮：定稿用，一键完成。先在节点的预览里点一下要的那张图，再点按钮，后台把这张图和它的 .json
 //   记录存成 subfolder 里的 <name>.png（不带编号），不弹窗；已有同名的定稿时直接替换。
+// - 「定稿后删除候选图」开关（默认关）：打开后，定稿存好的同时把 subfolder 里这个名字的带编号候选图全部删掉。
+//   开关的状态记在 node.properties.ga_final_cleanup 里，跟着工作流走。
 // - 「另存选中的图…」按钮：定稿用。先在节点的预览里点一下要的那张图，再点按钮，弹出系统的文件夹选择窗口，
 //   选完后后台把这张图和它的 .json 记录复制过去，文件名是 name 那一栏的名字（不带编号）；已有同名文件时不覆盖，
 //   自动加 _2、_3。节点上有多张图又没选中时，会先弹一个列表让你选是哪一张。
@@ -95,7 +97,12 @@ async function saveAs(node, index) {
 
 // 定稿提示里怎么说：替换了旧的要讲明白
 export const finalMessage = (data) =>
-  data.replaced ? `已保存为定稿（替换了原来的）：${data.saved}` : `已保存为定稿：${data.saved}`;
+  (data.replaced ? `已保存为定稿（替换了原来的）：${data.saved}` : `已保存为定稿：${data.saved}`) +
+  (data.removed > 0 ? `，并删除了 ${data.removed} 张候选图` : "");
+
+const CLEANUP_PROP = "ga_final_cleanup";
+// 这个保存节点上有没有打开「定稿后删除候选图」
+export const wantsCleanup = (save) => save?.properties?.[CLEANUP_PROP] === true;
 
 // 把一张图存成定稿：save 是「保存资产」节点（位置和名字取它上面填的），path 是这张图在硬盘上的完整路径。
 // 成功时返回后台的结果，失败时已经弹过提示，返回 null。
@@ -105,7 +112,7 @@ export async function saveFinal(save, path) {
   let res;
   try {
     res = await api.fetchApi("/game_art/save_final", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, name, subfolder }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, name, subfolder, cleanup: wantsCleanup(save) }),
     });
   } catch (err) {
     toast("error", `保存定稿失败：${err?.message ?? err}`);
@@ -233,8 +240,21 @@ app.registerExtension({
       b.tooltip = tooltip;
       return b;
     };
+    node.properties = node.properties ?? {};
+    const cleanup = node.addWidget("toggle", "定稿后删除候选图", wantsCleanup(node), (value) => {
+      node.properties[CLEANUP_PROP] = value === true;
+    }, { on: "删除", off: "保留" });
+    cleanup.serialize = false;
+    cleanup.options = { ...(cleanup.options ?? {}), serialize: false };
+    cleanup.tooltip = "默认保留。打开后，点「保存为定稿」时会把 subfolder 里这个 name 的带编号候选图（如 guanyu_00001.png）和它们的记录全部删掉，只留定稿。删掉的图找不回来，确定不再对比了再打开。";
+    // 打开已保存的工作流时，properties 在节点建好之后才读进来：这时把开关拨到存下来的状态
+    const configured = node.onConfigure?.bind(node);
+    node.onConfigure = function (info) {
+      configured?.(info);
+      cleanup.value = wantsCleanup(node);
+    };
     addButton("保存为定稿", (event) => saveSelected(node, event, finalize, "定稿"),
-      "一键定稿：先在预览里点一下要的那张图，再点这里。图片和记录会存到上面 subfolder 的位置，文件名就是 name（不带编号）；已有同名的定稿会被替换。");
+      "一键定稿：先在预览里点一下要的那张图，再点这里。图片和记录会存到上面 subfolder 的位置，文件名就是 name（不带编号）；已有同名的定稿会被替换。上面的开关打开时，还会删掉这个 name 的候选图。");
     addButton("另存选中的图…", (event) => saveSelected(node, event), "要存到别的地方时用：先在预览里点一下要的那张图，再点这里选文件夹，图片和记录会以 name 为文件名复制过去。");
 
     node.onDragOver = (e) => [...(e?.dataTransfer?.items ?? [])].some((item) => item.kind === "file");

@@ -165,15 +165,17 @@ def register() -> bool:
             return web.json_response({"error": "请求内容不是合法的 JSON"}, status=400)
 
     async def save_final_handler(request: Any) -> Any:
-        """「保存为定稿」：不弹窗，把这张图和它的记录存成节点 subfolder 里的 <name>.png，已有的定稿直接替换。"""
+        """「保存为定稿」：不弹窗，把这张图和它的记录存成节点 subfolder 里的 <name>.png，已有的定稿直接替换；
+        请求里 cleanup 为 true 时，存好后删掉这个名字的带编号候选图。"""
         try:
             body = await request.json()
             if not isinstance(body, dict):
                 raise InputError("bad_asset", "请求内容格式不对")
             output_dir = importlib.import_module("folder_paths").get_output_directory()
-            dest, replaced = finalize_asset(str(body.get("path") or ""), str(body.get("subfolder") or ""),
-                                            str(body.get("name") or ""), output_dir)
-            return web.json_response({"saved": str(dest), "replaced": replaced})
+            dest, replaced, removed = finalize_asset(
+                str(body.get("path") or ""), str(body.get("subfolder") or ""), str(body.get("name") or ""),
+                output_dir, cleanup=body.get("cleanup") is True)
+            return web.json_response({"saved": str(dest), "replaced": replaced, "removed": removed})
         except GAError as e:
             return web.json_response({"error": e.message}, status=400)
         except ValueError:

@@ -75,7 +75,7 @@ uv run ruff check
 |---|---|---|
 | 命令行 | `src/game_art/cli/app.py` 的 `main` | 每个子命令是一个函数，真正的逻辑在其内部的 `body()` 里，外层 `_guarded()` 把错误统一转成中文提示和退出码 |
 | ComfyUI 加载节点 | `comfy_nodes/__init__.py` | `ga comfy install` 在 `custom_nodes/` 下建符号链接指向 `comfy_nodes/`；这个文件把 `src/` 加进搜索路径，并导出 `NODE_CLASS_MAPPINGS` |
-| 编辑器里的脚本 | `comfy_nodes/web/` | 每个文件服务一个节点，需要后台配合的接口在 `comfy_nodes/routes.py`。`style_card.js`：把风格卡文件读进编辑框、支持拖入。`reference_images.js`：把拖进来的图片变成「加载图像」节点并连线。`prompt_expand.js`：读描述清单、点 `item` 选一项并填进 `brief`。`save_asset.js`：点 `subfolder` 弹系统的文件夹选择窗口；「保存为定稿」按钮调 `/game_art/save_final`，后台不弹窗，用 `finalize_asset` 把图和记录存成 `subfolder` 里的 `<name>.png`，已有的直接替换（`saveFinal` 是导出的，`qc_review.js` 的同名按钮也用它）；「另存选中的图…」按钮调 `/game_art/save_as`，后台弹窗选文件夹后用 `copy_asset` 把图和记录复制过去（节点运行时在 `ui.ga_files` 里给出每张图的完整路径）。`qc_review.js`：「质检结果」节点上的面板，把勾选的问题写回「提示词扩写」的 `feedback` |
+| 编辑器里的脚本 | `comfy_nodes/web/` | 每个文件服务一个节点，需要后台配合的接口在 `comfy_nodes/routes.py`。`style_card.js`：把风格卡文件读进编辑框、支持拖入。`reference_images.js`：把拖进来的图片变成「加载图像」节点并连线。`prompt_expand.js`：读描述清单、点 `item` 选一项并填进 `brief`。`save_asset.js`：点 `subfolder` 弹系统的文件夹选择窗口；「保存为定稿」按钮调 `/game_art/save_final`，后台不弹窗，用 `finalize_asset` 把图和记录存成 `subfolder` 里的 `<name>.png`，已有的直接替换；节点上的「定稿后删除候选图」开关（默认关，状态存在 `node.properties.ga_final_cleanup`，不是节点的输入）打开时请求里带 `cleanup: true`，后台存好定稿后用 `_remove_candidates` 删掉同目录下 `<name>_五位编号` 的图和记录，别的文件不碰（`saveFinal` 是导出的，`qc_review.js` 的同名按钮也用它）；「另存选中的图…」按钮调 `/game_art/save_as`，后台弹窗选文件夹后用 `copy_asset` 把图和记录复制过去（节点运行时在 `ui.ga_files` 里给出每张图的完整路径）。`qc_review.js`：「质检结果」节点上的面板，把勾选的问题写回「提示词扩写」的 `feedback` |
 
 **一次 `ga run` 走过的路**（`cli/app.py` 的 `run`）
 

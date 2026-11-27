@@ -131,11 +131,29 @@ def save_dir(subfolder: str, output_dir: str | Path) -> Path:
     return target
 
 
-def finalize_asset(src: str, subfolder: str, name: str, output_dir: str | Path) -> tuple[Path, bool]:
+def _remove_candidates(target_dir: Path, stem: str) -> int:
+    """删掉 target_dir 里这个名字的带编号候选图（<名字>_00001.png 这种）和它们的记录，返回删了几张图。
+    只认本节点起的文件名，别的文件一概不碰。"""
+    numbered = re.compile(re.escape(stem) + r"_\d{5}\.(png|json)", re.IGNORECASE)
+    removed = 0
+    for f in sorted(target_dir.iterdir()):
+        if f.is_file() and numbered.fullmatch(f.name):
+            try:
+                f.unlink()
+            except OSError as e:
+                raise InputError("cleanup_failed", f"定稿已经存好，但删除候选图 {f.name} 时出错：{e}") from e
+            removed += f.suffix.lower() == ".png"
+    return removed
+
+
+def finalize_asset(src: str, subfolder: str, name: str, output_dir: str | Path,
+                   cleanup: bool = False) -> tuple[Path, bool, int]:
     """定稿：把一张已保存的资产存成 subfolder 里的 <name>.png（不带编号），记录文件一起带过去。
 
     和 copy_asset 的区别：位置就是节点上填的 subfolder，不用再选；已有同名的定稿时直接替换，
-    因为定稿的文件名要固定，游戏项目才好引用。返回（写入的 PNG 路径，是否替换了旧的）。
+    因为定稿的文件名要固定，游戏项目才好引用。
+    cleanup：定稿存好之后，把同一个文件夹里这个名字的带编号候选图（连同记录）全部删掉，只留定稿。
+    返回（写入的 PNG 路径，是否替换了旧的，删掉了几张候选图）。
     """
     source, side = _checked_source(src)
     target_dir = save_dir(subfolder, output_dir)
@@ -148,7 +166,8 @@ def finalize_asset(src: str, subfolder: str, name: str, output_dir: str | Path) 
         raise InputError("bad_asset", f"这张图已经是定稿了：{dest}")
     replaced = dest.exists()
     _copy_to(source, side, dest)
-    return dest, replaced
+    removed = _remove_candidates(target_dir, dest.stem) if cleanup else 0
+    return dest, replaced, removed
 
 
 class GASaveAsset:

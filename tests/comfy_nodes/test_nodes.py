@@ -670,20 +670,20 @@ def test_save_asset_finalize(out_dir: pathlib.Path, tmp_path: pathlib.Path) -> N
     from comfy_nodes.nodes.save_asset import finalize_asset
     res = nodes.GASaveAsset().save(image=torch.rand(2, 4, 4, 3), subfolder="q", name="guanyu", meta={"prompt": "p"})
     files = res["ui"]["ga_files"]
-    dest, replaced = finalize_asset(files[0], "q", "guanyu", out_dir)
-    assert dest == (out_dir / "q" / "guanyu.png").resolve() and not replaced
+    dest, replaced, removed = finalize_asset(files[0], "q", "guanyu", out_dir)
+    assert dest == (out_dir / "q" / "guanyu.png").resolve() and not replaced and removed == 0
     assert dest.read_bytes() == Path(files[0]).read_bytes()
     record = json.loads(dest.with_suffix(".json").read_text())
     assert record["prompt"] == "p" and record["file"] == "guanyu.png" and record["copied_from"] == files[0]
     # 改主意了，换另一张当定稿：替换掉，不会多出 guanyu_2.png
-    dest, replaced = finalize_asset(files[1], "q", "guanyu.png", out_dir)
+    dest, replaced, _ = finalize_asset(files[1], "q", "guanyu.png", out_dir)
     assert replaced and dest.read_bytes() == Path(files[1]).read_bytes()
     assert not (out_dir / "q" / "guanyu_2.png").exists()
     # 带编号的候选图原样留着
     assert Path(files[0]).is_file() and Path(files[1]).is_file()
     # subfolder 写的是完整路径：存到那里，文件夹不存在会自动创建
     outside = tmp_path / "project" / "art"
-    dest, replaced = finalize_asset(files[0], str(outside), "guanyu", out_dir)
+    dest, replaced, _ = finalize_asset(files[0], str(outside), "guanyu", out_dir)
     assert dest == (outside / "guanyu.png").resolve() and not replaced and (outside / "guanyu.json").is_file()
     # 把定稿自己再存成定稿：没有意义，说清楚
     with pytest.raises(InputError, match="已经是定稿"):
@@ -694,6 +694,25 @@ def test_save_asset_finalize(out_dir: pathlib.Path, tmp_path: pathlib.Path) -> N
         finalize_asset(files[0], "q", "a/b", out_dir)
     with pytest.raises(InputError, match="找不到要另存的图片"):
         finalize_asset(str(tmp_path / "missing.png"), "q", "guanyu", out_dir)
+
+
+def test_save_asset_finalize_cleanup(out_dir: pathlib.Path) -> None:
+    """勾了「定稿后删除候选图」：定稿存好后，这个名字的带编号候选图和记录都删掉，别的文件不碰。"""
+    from comfy_nodes.nodes.save_asset import finalize_asset
+    node = nodes.GASaveAsset()
+    files = node.save(image=torch.rand(3, 4, 4, 3), subfolder="q", name="guanyu", meta={})["ui"]["ga_files"]
+    node.save(image=torch.rand(1, 4, 4, 3), subfolder="q", name="guanyu_boss", meta={})  # 别的资产，名字只是开头一样
+    folder = out_dir / "q"
+    (folder / "guanyu_notes.png").write_bytes(b"x")  # 不是本节点起的名字
+    picked = Path(files[1]).read_bytes()
+    dest, replaced, removed = finalize_asset(files[1], "q", "guanyu", out_dir, cleanup=True)
+    assert removed == 3 and not replaced and dest.read_bytes() == picked
+    assert sorted(f.name for f in folder.iterdir()) == [
+        "guanyu.json", "guanyu.png", "guanyu_boss_00001.json", "guanyu_boss_00001.png", "guanyu_notes.png"]
+    # 没有候选图可删也不报错
+    more = node.save(image=torch.rand(1, 4, 4, 3), subfolder="q", name="guanyu", meta={})["ui"]["ga_files"]
+    assert finalize_asset(more[0], "q", "guanyu", out_dir, cleanup=True)[1:] == (True, 1)
+    assert not Path(more[0]).exists() and (folder / "guanyu.png").is_file()
 
 
 def test_choose_folder_starts_at_last_location(tmp_path: pathlib.Path) -> None:
