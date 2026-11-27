@@ -127,7 +127,7 @@ class GACloudGenerate:
 | `GAQCScore` | `qc_score` | `steps.py`，模板在 `prompts/qc.md` |
 | `GAQCReview` | `qc_score`、`common_issues`；修图时 `fix_instruction`、`router.edit` | `steps.py`，模板在 `prompts/qc.md`、`prompts/common_issues.md`；节点上的面板在 `comfy_nodes/web/qc_review.js` |
 | `GAComposeTemplate` | `compose` | `compose.py` |
-| `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha`；定稿和另存是 `finalize_asset`、`copy_asset` | 写文件的逻辑在节点里，清理在 `imaging.py` |
+| `GASaveAsset` | 直接写 PNG 和 `.json`；`clean_faint_alpha`；定稿和另存是 `finalize_asset`、`copy_asset` | 写文件的逻辑在节点里，清理在 `imaging.py`，复制图和记录的 `copy_with_record` 在 `assets.py`（和 `ga final` 共用） |
 
 节点之间传六种数据：`STRING`、`IMAGE`、`MASK`、`GA_STYLE`（风格卡对象）、`GA_REFS`（参考图列表，每张保留原始尺寸）、`GA_META`（随图流转的元数据字典）。ComfyUI 的 `IMAGE` 不带透明度，所以透明度单独放在 `MASK` 里并排传，约定 `mask = 1 - alpha`；少接一根 `mask` 线，透明背景就丢了。转换代码在 `comfy_nodes/tensors.py`。
 
@@ -221,6 +221,9 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 | 无缝贴图 | `ga run workflows/seamless_texture.json --set expand.brief=<描述>`（出图时 `transparent=false`，再过 `GAMakeSeamless`） |
 | 模板合成 | `ga run workflows/compose_template.json --set 'art.image=@upload{<图>}' --set 'compose.vars_json={"name":"萬"}'`（先按 `examples/fonts/README.md` 下载示例字体） |
 | 只看补丁后的工作流 | `ga run <工作流> --set ... --dry-run`（不联网、不花钱） |
+| 按项目预设出一张 | `ga run --preset <预设.json> --item <id> [--max-cost 美元]` |
+| 修这张 / 采纳并重新生成 | `ga fix <候选图> --issue N --note 文字`、`ga regen <候选图> --issue N [--reset]` |
+| 质检这张 / 定稿 | `ga qc <图>`、`ga final <候选图> [--name 名字] [--force]` |
 | 批量开始 | `ga batch start <清单.yaml> [--out D]` |
 | 批次状态 | `ga batch status <批次目录>` |
 | 挑图 | `ga batch select <批次目录> 1 3 5` 或 `--item warrior=1,2 --item granary=3` |
@@ -234,6 +237,17 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 - `--out` 默认 `./outputs/<日期>/<tag>`；`--timeout` 默认 600 秒，超时**不会**取消 ComfyUI 里的任务，用 `ga comfy wait` 续等。
 - `gen.seed` 默认不发给上游（多数图片接口不支持），只用于 ComfyUI 的缓存判断：`-1` 每次都重新出图，固定值在输入不变时复用上次结果。
 
+**按项目预设逐张出图和修图**（`ga run --preset`、`ga fix`、`ga regen`、`ga qc`、`ga final`，2026-11 应《三国守御录》美术的需求加的，需求原文在那个项目的 `art/common/ga-requests.md`）。出图改成"美术在命令行逐张跑、负责人定稿"，所以编辑器「质检结果」面板上的几个按钮要能在命令行里做。不做批量、自动挑图、自动定稿，每条命令只处理一张图。实现思路是**不另写一套出图逻辑**，而是把预设交给 ComfyUI 跑，只改几个输入，和编辑器里点按钮时页面脚本做的事一样：
+
+- 预设是编辑器格式。`comfy/editor.py` 的 `from_editor_graph` 是 `to_editor_graph` 的反向：按 `/api/object_info` 的输入顺序把 `widgets_values` 对回输入名（种子后面多一个 `fixed` 之类的值、上传控件后面多一个 `image`，两边规则要一致），节点名取 `properties.ga_id`。说明框去掉、转接点连通、静音节点去掉，旁路节点报错。所以带 `--preset` 时 `--dry-run` 也要连 ComfyUI 读节点定义。
+- 命令行这边的拼装在 `cli/preset.py`：`apply_item`（对应编辑器里选 item：填 brief、asset_type，清空 feedback，改 `save.name`）、`prepare_fix`、`prepare_regen`、`prepare_qc`。要求预设的节点叫 `expand`、`qc`、`save`（由 `text_to_asset_qc` 生成的都是）。fix 和 qc 用 `prune_to(wf, "save")` 只留保存节点的上游，去掉「查看提示词」这类输出节点，否则它们会让扩写多跑一次。
+- **修图和补质检怎么拿到原图**：`GAQCReview` 的 `fix` 里 `file` 除了临时目录里的名字，也可以是已保存候选图的完整路径（要求是 `.png` 且旁边有 `.json`，见 `_saved_asset`），记录就从那个 `.json` 读。注意命令行修的是保存下来的图（已经过去背景和 `clean_alpha`），编辑器修的是质检时存在临时目录里的原样，二者略有差别。命令行修图时 `fix` 还带 `issues`（选的第几条），节点把 `from`（原图文件名）和 `issues` 记进新图的 `fix`。
+- 新图存到候选图所在的文件夹，名字取候选图去掉五位编号的部分（`assets.base_name`），编号交给「保存资产」节点照常往下排。结果从任务历史里「保存资产」的 `ga_files`（完整路径）取，不下载；补质检的结果从「质检结果」节点的 `ga_qc` 取，命令行写回 `.json` 的 `qc`。
+- **问题的序号**是 `.json` 里 `qc.details` 的顺序，从 1 数（`assets.issues_of`）。fix 只许选细节类、最多 `MAX_FIX_ISSUES` 条（和页面脚本一致）；regen 的修订意见 = 记录里的 `feedback`（这张图出图时带的）+ 这次选的问题 + `--note`，按 `feedback_lines` 去重，`--reset` 丢掉前一部分。
+- 预设路径记在新图 `.json` 的 `preset` 里（命令行事后补写，`_mark_preset`），之后的命令不用再写 `--preset`；编辑器出的图没有这一项。
+- **费用**：`estimate.py` 提交前按配置单价估算（出图取模型组里最贵的，文字和看图调用按固定 token 数），超过 `--max-cost` 抛 `BudgetExceeded`（退出码 9）。它会跳过修图/补质检时「质检结果」不向上游要的那条线。实际花费是事后从账本按这次的 tag（`run/`、`fix/`、`regen/`、`qc/` 加 8 位随机）汇总的，所以要求 ComfyUI 和命令行用同一个 `data_dir`。
+- 定稿是纯本机操作（`assets.finalize`）：和编辑器的「保存为定稿」不同，目标已存在时默认拒绝，`--force` 时先把旧定稿挪到 `_final_backup/<名字>_<时间>.png`。`copy_with_record` 和「保存资产」节点共用。
+
 退出码：
 
 | 码 | 含义 | 处理 |
@@ -244,7 +258,7 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 | 4 | 上游错误（云端或 ComfyUI 不可达、报错） | `ga config check` 定位；错误里会列出每个目标的原因 |
 | 5 | 等待超时，任务**未**取消 | `ga comfy wait <prompt_id>`；批量用 `ga batch resume` |
 | 6 | ComfyUI 执行失败 | 看错误详情，常见是节点缺依赖 |
-| 9 | 预算超限，批次已暂停 | `ga batch resume <目录> --budget <新上限>` |
+| 9 | 预算超限：批次已暂停，或估算费用超过 `--max-cost`（没有提交） | 批量用 `ga batch resume <目录> --budget <新上限>`；单张的问使用者要不要放宽上限 |
 | 130 | 用户中断 | 批量用 `resume` 续跑 |
 
 `--json` 失败时 stdout 为 `{"ok": false, "error": {"code", "message", "details"}}`。
@@ -290,7 +304,7 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 - **绝不读取、打印、复述或索要用户的密钥。** 不要查看 `~/.game_art/.env`，不要输出相关环境变量，不要把密钥写进命令、日志或回复。缺密钥时只告诉用户自己把它写进 `~/.game_art/.env`。
 - 图上需要文字或精确数量的图案时，走模板合成，不要让模型画字。
 - 首次使用或遇到退出码 3、4 时，先跑 `ga config check`。
-- 会花钱的命令（`run`、`batch start`、`batch rerun`）开跑前，说明一次大致规模（张数 × 单价）。
+- 会花钱的命令（`run`、`fix`、`regen`、`qc`、`batch start`、`batch rerun`）开跑前，说明一次大致规模（张数 × 单价；单张的可先加 `--dry-run` 看估算）。
 - 提高预算、重跑、覆盖文件这类决定由用户做，不要自作主张。
 
 **需求怎么翻译成命令**
@@ -301,6 +315,9 @@ generate ──▶ qc ──▶ route ──┐ 还有没处理完的项：回�
 | 给了一张图，"做同风格的灯笼" | `ga run workflows/ref_to_asset.json --set ref.paths=<绝对路径> --set expand.brief=<描述> --json` |
 | "先看看风格" | `ga run workflows/style_samples.json --set expand.brief=<描述> --json` |
 | "把这张图做成牌面，字写'萬'" | `ga run workflows/compose_template.json --set 'art.image=@upload{<路径>}' --set 'compose.vars_json={"name":"萬"}' --json` |
+| "用 tower 预设出 archer_lv1" | `ga run --preset <项目>/art/common/workflows/tower.json --item archer_lv1 --json`，把图和带序号的问题列给用户 |
+| "修第 2、4 条，旗子改草黄" | `ga fix <候选图> --issue 2 --issue 4 --note "旗子改成草黄色" --json`；构图类问题改用 `ga regen` |
+| "这张定稿" | `ga final <候选图> --json`；已有定稿时问用户要不要 `--force` |
 | 给了一批物品 | 写一份清单 YAML，**先给用户确认**（建议总是设 `budget`），再 `ga batch start <清单> --json` |
 | "换一种画风" | 新写一张风格卡，`--set style.path=<卡路径>` |
 | "照这几张图的画风来" | 在出图命令上加 `--set 'ref.paths=<图1>;<图2>'`（`text_to_asset`、`style_samples` 也支持） |

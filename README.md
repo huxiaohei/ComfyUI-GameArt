@@ -221,11 +221,34 @@ Gemini 图片模型不支持透明背景，需要透明底时接「去背景」�
 | 统一一批图的主体大小 | `ga fit <文件夹或图片> [--ratio 0.7]`：本机处理、不花钱；先加 `--dry-run` 看会改哪些。改之前原图备份在同目录的 `_fit_backup/` |
 | 无缝贴图 | `ga run workflows/seamless_texture.json --set expand.brief=<描述>` |
 | 模板合成 | `ga run workflows/compose_template.json --set 'art.image=@upload{<图>}' --set 'compose.vars_json={"name":"萬"}'` |
-| 只看参数，不出图 | 在 `ga run` 后面加 `--dry-run`（不联网、不花钱） |
+| 按项目预设出一张 | `ga run --preset <预设.json> --item <id>`，修图和定稿见下文 |
+| 只看参数，不出图 | 在 `ga run` 后面加 `--dry-run`（不提交、不花钱；用 `--preset` 时要读 ComfyUI 的节点定义） |
 
 `--set <节点>.<参数>=<值>` 可以写多个，节点名就是编辑器里节点标题"·"后面的那个词。常用的有 `style.path`（风格卡）、`ref.paths`（参考图，多张用分号隔开）、`expand.asset_type`、`gen.size`、`gen.n`、`save.subfolder`、`save.name`、`save.clean_alpha`。所有命令都支持 `--json`。
 
-出错时的退出码：2 用法写错；3 配置、文件或参数有问题；4 云端或 ComfyUI 连不上；5 等待超时（任务还在跑，用 `ga comfy wait <prompt_id>` 续等，不要重新提交）；6 ComfyUI 执行失败；9 批量超出预算。
+出错时的退出码：2 用法写错；3 配置、文件或参数有问题；4 云端或 ComfyUI 连不上；5 等待超时（任务还在跑，用 `ga comfy wait <prompt_id>` 续等，不要重新提交）；6 ComfyUI 执行失败；9 超出预算（批量超预算，或估算费用超过 `--max-cost`）。
+
+### 按项目预设逐张出图、修图
+
+在编辑器里搭好、存进游戏项目的工作流（风格卡、参考图、描述清单、保存位置都定好了）叫预设。命令行可以直接用它，效果和编辑器里「质检结果」面板上的按钮一样，每条命令只处理一张图：
+
+```bash
+ga run --preset <项目>/art/common/workflows/tower.json --item archer_lv1   # 出一张：和在编辑器里选 item 后点运行一样
+ga fix   <候选图.png> --issue 2 --issue 4 --note "旗子改成草黄色"          # 修这张
+ga regen <候选图.png> --issue 1 --note "支脚垂直，底架下窄上宽"            # 采纳并重新生成
+ga qc    <图.png>                                                         # 质检这张（手动修过的也行）
+ga final <候选图.png> --name archer_lv1                                   # 保存为定稿
+```
+
+- **出图**：图和 `.json` 存到预设里的保存位置，编号接着往下排（`archer_lv1_00002.png`）。命令行会把每张图的质检分数和问题列出来，问题前面的序号就是 `.json` 里 `qc.details` 的顺序，`fix` 和 `regen` 的 `--issue` 用的就是它。
+- **修这张（fix）**：在原图上改，原图不动，结果是下一个编号的新候选，改完自动质检一次。`--issue` 只能选细节类问题，一次最多 3 条；选了构图类会报错，请改用 `regen`。`--note` 是「我的补充」，可以写多条。默认带上预设里的风格参考图（`--no-refs` 不带）；改图模型、画质、保真度沿用预设，可用 `--edit-profile`、`--edit-model`、`--quality`、`--fidelity` 换。新图 `.json` 的 `fix` 里记着修自哪一张（`from`）、选了哪几条（`issues`）、按什么意见改的（`notes`）。
+- **采纳并重新生成（regen）**：用这张图的描述，带上选中的问题（细节类、构图类都可以）和补充整张重出。修订意见逐轮累积，新图 `.json` 的 `feedback` 里能看到累积了哪些；加 `--reset` 清空重来。
+- **质检这张（qc）**：按图 `.json` 里的描述和预设的风格卡重新打分，结果写回 `.json`。
+- **定稿（final）**：把图和 `.json` 拷成同目录下的 `<name>.png`、`<name>.json`，`--name` 不写时用候选图去掉编号的名字。定稿已存在时不覆盖，要替换加 `--force`，旧定稿先备份到同目录的 `_final_backup/`。候选图不删。不花钱。
+- **用的是哪个预设**：`ga run --preset` 出的图，`.json` 里记着 `preset`，之后 `fix`、`regen`、`qc` 不用再写。在编辑器里出的图没有这一项，要加 `--preset <预设.json>`。
+- **费用**：这几条命令都支持 `--json`（输出新图路径、质检分数、是否及格、带序号的问题列表、这次花了多少钱）和 `--max-cost <美元>`（按配置估算，超过就不提交，退出码 9）；加 `--dry-run` 只看要提交的内容和估算费用。修一张大约是改图一张加两次看图的钱。
+
+这几条命令需要 ComfyUI 开着，而且节点是最新的（更新本仓库后重启 ComfyUI）。批量出图、自动挑图、自动定稿不在这里做，每张图都要有人看过。
 
 ### 批量
 

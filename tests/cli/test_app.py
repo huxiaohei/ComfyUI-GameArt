@@ -117,8 +117,13 @@ def test_run_json_success_shape(stub_comfy: type[StubComfy], tmp_wf: Path, tmp_p
     r = runner.invoke(cli.app, ["run", str(tmp_wf), "--out", str(tmp_path / "o"), "--json"])
     assert r.exit_code == 0
     d = json.loads(r.stdout)
-    assert d == {"ok": True, "prompt_id": "pid123", "files": [str(tmp_path / "o" / "a_00001.png")],
-                 "meta": [{"tag": "t", "provider": "p"}]}
+    png = str(tmp_path / "o" / "a_00001.png")
+    assert {k: d[k] for k in ("ok", "prompt_id", "files", "meta")} == {
+        "ok": True, "prompt_id": "pid123", "files": [png], "meta": [{"tag": "t", "provider": "p"}]}
+    # 新加的字段：花了多少钱（按账本），每张图的质检结果（这里的记录里没有质检）
+    assert d["cost"] == 0.0 and d["tag"].startswith("run/")
+    assert d["images"] == [{"path": png, "record": png[:-4] + ".json", "score": None, "passed": None,
+                            "threshold": None, "issues": [], "image_cost": None}]
 
 
 def test_run_default_out_uses_date_and_tag(

@@ -16,6 +16,7 @@ from typing import Any
 
 import torch
 
+from game_art.assets import copy_with_record
 from game_art.errors import InputError
 from game_art.imaging import clean_faint_alpha
 
@@ -84,17 +85,7 @@ def _stem(name: str) -> str:
     return (name[:-4] or "asset") if name.lower().endswith(".png") else name
 
 
-def _copy_to(source: Path, side: Path, dest: Path) -> None:
-    """把图片和记录写到 dest（.png）和它旁边的 .json，记录里的文件名跟着改。"""
-    try:
-        data = source.read_bytes()
-        record = json.loads(side.read_text(encoding="utf-8"))
-        if isinstance(record, dict):
-            record.update(file=dest.name, copied_from=str(source))
-        dest.write_bytes(data)
-        dest.with_suffix(".json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    except (OSError, ValueError) as e:
-        raise InputError("copy_failed", f"另存失败：{e}") from e
+_copy_to = copy_with_record  # 和命令行 ga final 共用，在核心库 assets.py 里
 
 
 def copy_asset(src: str, dest_dir: str, name: str) -> Path:

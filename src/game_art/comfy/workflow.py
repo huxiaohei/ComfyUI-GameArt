@@ -12,13 +12,13 @@ from game_art.paths import resolve_repo_path
 UPLOAD_PREFIX = "@upload{"
 
 
-def _resolve_repo(obj: Any) -> Any:
+def resolve_repo_values(obj: Any) -> Any:
     if isinstance(obj, str):
         return resolve_repo_path(obj)
     if isinstance(obj, list):
-        return [_resolve_repo(x) for x in obj]
+        return [resolve_repo_values(x) for x in obj]
     if isinstance(obj, dict):
-        return {k: _resolve_repo(v) for k, v in obj.items()}
+        return {k: resolve_repo_values(v) for k, v in obj.items()}
     return obj
 
 
@@ -40,7 +40,7 @@ def load_workflow(path: Path) -> dict[str, Any]:
                 "workflow_invalid",
                 f"节点 {node_id!r} 缺少 class_type 或 inputs，不是 API 格式工作流：{path}",
             )
-    return {nid: {**node, "inputs": _resolve_repo(node["inputs"])} for nid, node in data.items()}
+    return {nid: {**node, "inputs": resolve_repo_values(node["inputs"])} for nid, node in data.items()}
 
 
 def _coerce(existing: Any, raw: str) -> Any:

@@ -1,4 +1,4 @@
-"""ga 命令行入口：config check / comfy install / comfy wait / run / fit / batch。
+"""ga 命令行入口：config check / comfy install / comfy wait / run / fix / regen / qc / final / fit / batch。
 
 约定：stdout 只放结果（--json 时恰好一个 JSON 对象），进度与错误说明走 stderr；
 退出码见全局约束（0/2/3/4/5/6/9/130）。
@@ -17,14 +17,18 @@ from typing import TYPE_CHECKING, Any
 import typer
 from PIL import Image
 
-from game_art import imaging
+from game_art import assets, imaging
+from game_art.cli import preset
 from game_art.comfy.client import ComfyClient
 from game_art.comfy.editor import to_editor_graph
 from game_art.comfy.workflow import apply_sets, find_uploads, load_workflow
 from game_art.config import load_settings
-from game_art.errors import GAError, InputError
+from game_art.errors import BudgetExceeded, GAError, InputError
+from game_art.estimate import estimate_cost
+from game_art.ledger import Ledger
 from game_art.models import probe_models
 from game_art.paths import REPO_ROOT
+from game_art.steps import feedback_lines
 
 if TYPE_CHECKING:
     from game_art.batch.graph import BatchStatus
@@ -287,37 +291,293 @@ def _fill_tags(wf: dict[str, Any], tag: str) -> None:
             inputs["tag"] = tag
 
 
+def _check_cost(wf: dict[str, Any], max_cost: float | None) -> float:
+    """按配置估算这次的费用；超过 --max-cost 就不提交（退出码 9）。"""
+    est = estimate_cost(wf, load_settings())
+    if max_cost is not None and est > max_cost:
+        raise BudgetExceeded("over_max_cost", f"估算这次要花 {est:.4f} 美元，超过了 --max-cost {max_cost:g}，没有提交",
+                             {"estimate": est, "max_cost": max_cost})
+    return est
+
+
+def _submit(client: ComfyClient, wf: dict[str, Any], timeout: float) -> tuple[str, dict[str, Any]]:
+    for node_id, name, path in find_uploads(wf):
+        _err(f"上传 {path} …")
+        wf[node_id]["inputs"][name] = client.upload(path)
+    prompt_id = client.submit(wf)
+    _err(f"已提交 {prompt_id}，等待中（超时 {timeout:g}s）…")
+    try:
+        return prompt_id, client.wait(prompt_id, timeout)
+    except KeyboardInterrupt:
+        _err(f"中断；任务仍在 ComfyUI 中运行，可用 ga comfy wait {prompt_id} 继续")
+        raise
+
+
+def _image_row(png: Path, threshold: float | None = None) -> dict[str, Any]:
+    """一张图的结果：路径、质检分数、是否及格、问题列表（带序号、必须改/建议改、细节/构图）。"""
+    try:
+        record = assets.read_record(png)
+    except InputError:
+        record = {}
+    qc = assets.qc_of(record)
+    return {"path": str(png), "record": str(assets.record_path(png)),
+            "score": qc.get("score") if qc else None, "passed": qc.get("passed") if qc else None,
+            "threshold": threshold, "issues": assets.issues_of(record), "image_cost": record.get("cost")}
+
+
+def _spent(tag: str) -> float:
+    return round(Ledger.from_settings(load_settings()).spent(tag), 4)
+
+
+def _threshold(wf: dict[str, Any]) -> float | None:
+    value = wf.get(preset.QC, {}).get("inputs", {}).get("threshold")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _print_rows(rows: list[dict[str, Any]], cost: float) -> None:
+    for r in rows:
+        passed = "及格" if r["passed"] else "不及格"
+        verdict = "未质检" if r["score"] is None else f"{r['score']:.1f} 分，{passed}"
+        typer.echo(f"{r['path']}（{verdict}）")
+        for i in r["issues"]:
+            level = "必须改" if i["level"] == "must" else "建议改"
+            kind = "构图" if i["kind"] == "layout" else "细节"
+            typer.echo(f"  {i['n']}. [{level}·{kind}] {i['text']}")
+    typer.echo(f"本次估算花费 {cost:.4f} 美元")
+
+
+def _report_images(prompt_id: str, tag: str, pngs: list[Path], wf: dict[str, Any], as_json: bool,
+                   extra: dict[str, Any] | None = None) -> None:
+    rows = [_image_row(p, _threshold(wf)) for p in pngs]
+    cost = _spent(tag)
+    if as_json:
+        _emit_json({"ok": True, "prompt_id": prompt_id, "tag": tag, "cost": cost, "images": rows, **(extra or {})})
+    else:
+        _print_rows(rows, cost)
+
+
+def _mark_preset(pngs: list[Path], preset_path: Path) -> None:
+    """在新图的记录里记下用的是哪个预设，之后 fix / regen / qc 不用再写 --preset。"""
+    for png in pngs:
+        try:
+            record = assets.read_record(png)
+        except InputError:
+            continue
+        record["preset"] = str(preset_path)
+        assets.write_record(png, record)
+
+
+def _resolve_preset(given: Path | None, record: dict[str, Any], png: Path) -> Path:
+    if given is not None:
+        return given.expanduser().resolve()
+    if isinstance(record.get("preset"), str) and record["preset"]:
+        return Path(record["preset"])
+    raise InputError("no_preset", (
+        f"不知道 {png.name} 是用哪个预设出的（记录里没有 preset，可能是在编辑器里出的）："
+        "请加 --preset <预设.json>"))
+
+
+def _run_preset(client: ComfyClient, wf: dict[str, Any], preset_path: Path, *, tag: str, timeout: float,
+                max_cost: float | None, dry_run: bool, as_json: bool, extra: dict[str, Any] | None = None) -> None:
+    """预设类命令的公共部分：补 tag → 估算费用 → 提交 → 等待 → 记下预设 → 报告新图。"""
+    _fill_tags(wf, tag)
+    _err(f"估算费用 {_check_cost(wf, max_cost):.4f} 美元")
+    if dry_run:
+        _emit_json(wf)
+        return
+    prompt_id, entry = _submit(client, wf, timeout)
+    pngs = preset.saved_files(entry)
+    if not pngs:
+        raise InputError("nothing_saved", (
+            "这次运行没有保存任何图片：确认预设里有「保存资产」节点、ComfyUI 里的节点是最新的"))
+    _mark_preset(pngs, preset_path)
+    _report_images(prompt_id, tag, pngs, wf, as_json, extra)
+
+
+def _with_item(wf: dict[str, Any], item: str | None, sets: list[str]) -> dict[str, Any]:
+    """先套 --set（可能设了 briefs_path），再按 --item 选一项，最后再套一遍 --set，让手写的值优先。"""
+    wf = apply_sets(wf, sets)
+    if not item:
+        return wf
+    preset.apply_item(wf, item)
+    return apply_sets(wf, sets)
+
+
+def _new_tag(kind: str) -> str:
+    return f"{kind}/{uuid.uuid4().hex[:8]}"
+
+
 @app.command("run")
 def run(
-    workflow: Path = typer.Argument(..., help="API 格式工作流 JSON"),
+    workflow: Path | None = typer.Argument(None, help="API 格式工作流 JSON；用 --preset 时不写"),
+    preset_path: Path | None = typer.Option(None, "--preset", help=(
+        "项目的预设工作流（编辑器里保存的 .json）。出来的图和在编辑器里点运行一样，存到预设里的保存位置")),
+    item: str | None = typer.Option(None, "--item", help="描述清单里的哪一项，和编辑器里点 item 选一项一样"),
     sets: list[str] = typer.Option([], "--set", help="<节点>.<输入>=<值>，可重复"),
-    out: Path | None = typer.Option(None, "--out", help="输出目录，默认 ./outputs/<日期>/<tag>"),
+    out: Path | None = typer.Option(None, "--out", help="输出目录，默认 ./outputs/<日期>/<tag>（--preset 时不用）"),
     timeout: float = typer.Option(600, "--timeout", help="最长等待秒数（超时不取消任务）"),
     tag: str | None = typer.Option(None, "--tag", help="自动填入工作流中空的 tag 输入，默认 run/<8位随机>"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="只打印补丁后的工作流，不联网"),
+    max_cost: float | None = typer.Option(None, "--max-cost", help="估算费用超过这么多美元就不提交（退出码 9）"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只打印补丁后的工作流，不提交、不花钱"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
-    """运行单个工作流：上传 @upload{} → 补 tag → 提交 → 等待 → 下载。"""
+    """运行单个工作流：上传 @upload{} → 补 tag → 提交 → 等待 → 下载。用 --preset 时直接存到预设的保存位置。"""
+    if (workflow is None) == (preset_path is None):
+        raise typer.BadParameter("要么写 API 格式工作流的路径，要么用 --preset 指定预设，二选一")
+
     def body() -> None:
-        wf = apply_sets(load_workflow(workflow), sets)
-        run_tag = tag or f"run/{uuid.uuid4().hex[:8]}"
+        run_tag = tag or _new_tag("run")
+        if preset_path is not None:
+            client = ComfyClient(load_settings().comfy_url)
+            wf = _with_item(preset.load_preset(preset_path, client.object_info()), item, sets)
+            _run_preset(client, wf, preset_path.expanduser().resolve(), tag=run_tag, timeout=timeout,
+                        max_cost=max_cost, dry_run=dry_run, as_json=as_json)
+            return
+        assert workflow is not None
+        wf = _with_item(load_workflow(workflow), item, sets)
         _fill_tags(wf, run_tag)
+        _err(f"估算费用 {_check_cost(wf, max_cost):.4f} 美元")
         if dry_run:
             _emit_json(wf)
             return
         client = ComfyClient(load_settings().comfy_url)
-        for node_id, name, path in find_uploads(wf):
-            _err(f"上传 {path} …")
-            wf[node_id]["inputs"][name] = client.upload(path)
-        prompt_id = client.submit(wf)
-        _err(f"已提交 {prompt_id}，等待中（超时 {timeout:g}s）…")
-        try:
-            entry = client.wait(prompt_id, timeout)
-        except KeyboardInterrupt:
-            _err(f"中断；任务仍在 ComfyUI 中运行，可用 ga comfy wait {prompt_id} 继续")
-            raise
+        prompt_id, entry = _submit(client, wf, timeout)
         written = client.download_outputs(entry, out or _default_out(run_tag))
-        _report_outputs(prompt_id, written, as_json)
+        files, meta = _collect(written)
+        rows = [_image_row(Path(f), _threshold(wf)) for f in files if f.lower().endswith(".png")]
+        cost = _spent(run_tag)
+        if as_json:
+            _emit_json({"ok": True, "prompt_id": prompt_id, "tag": run_tag, "cost": cost, "files": files,
+                        "meta": meta, "images": rows})
+        else:
+            for f in files:
+                typer.echo(f)
+
+    _guarded(as_json, body)
+
+
+# ---------------------------------------------------------------- fix / regen / qc / final（逐张出图和修图）
+PRESET_OPT = typer.Option(None, "--preset", help=(
+    "预设工作流；不写时用这张图记录里的 preset（ga run --preset 出的图都有）"))
+ISSUE_OPT = typer.Option([], "--issue", help=(
+    "选这张图质检结果里的第几条问题（就是 .json 里 qc.details 的顺序，从 1 数），可重复"))
+NOTE_OPT = typer.Option([], "--note", help="我的补充：质检没看出来、但想改的地方，可重复")
+TIMEOUT_OPT = typer.Option(600, "--timeout", help="最长等待秒数（超时不取消任务）")
+MAX_COST_OPT = typer.Option(None, "--max-cost", help="估算费用超过这么多美元就不提交（退出码 9）")
+DRY_RUN_OPT = typer.Option(False, "--dry-run", help="只打印要提交的工作流，不提交、不花钱")
+
+
+def _load_for(image: Path, preset_opt: Path | None) -> tuple[Path, dict[str, Any], Path, ComfyClient,
+                                                             dict[str, Any]]:
+    png = assets.checked_asset(image)
+    record = assets.read_record(png)
+    preset_path = _resolve_preset(preset_opt, record, png)
+    client = ComfyClient(load_settings().comfy_url)
+    wf = preset.load_preset(preset_path, client.object_info())
+    return png, record, preset_path, client, wf
+
+
+@app.command("fix")
+def fix(
+    image: Path = typer.Argument(..., help="要修的候选图（.png，旁边要有同名 .json）"),
+    issues: list[int] = ISSUE_OPT,
+    notes: list[str] = NOTE_OPT,
+    preset_path: Path | None = PRESET_OPT,
+    refs: bool | None = typer.Option(None, "--refs/--no-refs", help=(
+        "带不带预设里的风格参考图作画风对照，默认按预设（一般是带）")),
+    edit_profile: str | None = typer.Option(None, "--edit-profile", help="改图用的模型组，默认按预设"),
+    edit_model: str | None = typer.Option(None, "--edit-model", help="直接指定改图模型（服务商:模型名），默认按预设"),
+    quality: str | None = typer.Option(None, "--quality", help="画质档 high / medium / low / 跟随配置，默认按预设"),
+    fidelity: str | None = typer.Option(None, "--fidelity", help="保真度 high / low / 跟随配置，默认按预设"),
+    timeout: float = TIMEOUT_OPT,
+    max_cost: float | None = MAX_COST_OPT,
+    dry_run: bool = DRY_RUN_OPT,
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """在原图上修（对应编辑器的「修这张」）：只修选中的细节类问题（最多 3 条）和补充，其余基本保留。
+    结果存为下一个编号的新候选，原图不动；修完自动质检一次。"""
+    def body() -> None:
+        png, record, preset_path_, client, wf = _load_for(image, preset_path)
+        wf = preset.prepare_fix(wf, png, record, issues, notes, with_refs=refs, edit_profile=edit_profile,
+                                edit_model=edit_model, quality=quality, fidelity=fidelity)
+        _run_preset(client, wf, preset_path_, tag=_new_tag("fix"), timeout=timeout, max_cost=max_cost,
+                    dry_run=dry_run, as_json=as_json, extra={"from": str(png)})
+
+    _guarded(as_json, body)
+
+
+@app.command("regen")
+def regen(
+    image: Path = typer.Argument(..., help="参照的候选图（.png，旁边要有同名 .json）"),
+    issues: list[int] = ISSUE_OPT,
+    notes: list[str] = NOTE_OPT,
+    reset: bool = typer.Option(False, "--reset", help="清空之前累积的修订意见，只用这次选的"),
+    preset_path: Path | None = PRESET_OPT,
+    timeout: float = TIMEOUT_OPT,
+    max_cost: float | None = MAX_COST_OPT,
+    dry_run: bool = DRY_RUN_OPT,
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """整张重出（对应编辑器的「采纳并重新生成」）：用这张图的描述，带上选中的问题（细节类、构图类都行）重新出图并质检。
+    修订意见逐轮累积，新图 .json 的 feedback 里能看到累积了哪些。"""
+    def body() -> None:
+        png, record, preset_path_, client, wf = _load_for(image, preset_path)
+        wf = preset.prepare_regen(wf, png, record, issues, notes, reset=reset)
+        feedback = feedback_lines(wf[preset.EXPAND]["inputs"]["feedback"])
+        _run_preset(client, wf, preset_path_, tag=_new_tag("regen"), timeout=timeout, max_cost=max_cost,
+                    dry_run=dry_run, as_json=as_json, extra={"from": str(png), "feedback": feedback})
+
+    _guarded(as_json, body)
+
+
+@app.command("qc")
+def qc(
+    image: Path = typer.Argument(..., help="要质检的图（.png，旁边要有同名 .json；手动修过的也可以）"),
+    preset_path: Path | None = PRESET_OPT,
+    timeout: float = TIMEOUT_OPT,
+    max_cost: float | None = MAX_COST_OPT,
+    dry_run: bool = DRY_RUN_OPT,
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """按这张图 .json 里的描述和预设的风格卡重新质检，结果写回 .json 的 qc。不出图、不改图。"""
+    def body() -> None:
+        png, record, preset_path_, client, wf = _load_for(image, preset_path)
+        wf = preset.prepare_qc(wf, png)
+        tag = _new_tag("qc")
+        _fill_tags(wf, tag)
+        _err(f"估算费用 {_check_cost(wf, max_cost):.4f} 美元")
+        if dry_run:
+            _emit_json(wf)
+            return
+        prompt_id, entry = _submit(client, wf, timeout)
+        record = assets.read_record(png)  # 等待期间可能被别处改过，写回前重新读
+        record["qc"] = preset.qc_result(entry)
+        record.setdefault("preset", str(preset_path_))
+        assets.write_record(png, record)
+        _report_images(prompt_id, tag, [png], wf, as_json)
+
+    _guarded(as_json, body)
+
+
+@app.command("final")
+def final(
+    image: Path = typer.Argument(..., help="选定的候选图（.png，旁边要有同名 .json）"),
+    name: str | None = typer.Option(None, "--name", help=(
+        "定稿名，默认是候选图去掉编号的部分（archer_lv1_00002 → archer_lv1）")),
+    force: bool = typer.Option(False, "--force", help="定稿已存在时替换它（旧定稿先备份到 _final_backup/）"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """定稿（对应编辑器的「保存为定稿」）：把图和 .json 拷成同目录下的 <name>.png / <name>.json。候选图不删。不花钱。"""
+    def body() -> None:
+        png = assets.checked_asset(image)
+        dest, backup = assets.finalize(png, name or assets.base_name(png), force=force)
+        if as_json:
+            _emit_json({"ok": True, "path": str(dest), "record": str(assets.record_path(dest)), "from": str(png),
+                        "backup": str(backup) if backup else None, "cost": 0.0})
+        else:
+            typer.echo(str(dest))
+            if backup:
+                _err(f"旧定稿已备份到 {backup}")
 
     _guarded(as_json, body)
 
