@@ -245,7 +245,8 @@ ComfyUI 的图不能成环，节点之间也只能顺着连线传数据。凡是
 - 新图存到候选图所在的文件夹，名字取候选图去掉五位编号的部分（`assets.base_name`），编号交给「保存资产」节点照常往下排。结果从任务历史里「保存资产」的 `ga_files`（完整路径）取，不下载；补质检的结果从「质检结果」节点的 `ga_qc` 取，命令行写回 `.json` 的 `qc`。
 - **问题的序号**是 `.json` 里 `qc.details` 的顺序，从 1 数（`assets.issues_of`）。fix 只许选细节类、最多 `MAX_FIX_ISSUES` 条（和页面脚本一致）；regen 的修订意见 = 记录里的 `feedback`（这张图出图时带的）+ 这次选的问题 + `--note`，按 `feedback_lines` 去重，`--reset` 丢掉前一部分。
 - 预设路径记在新图 `.json` 的 `preset` 里（命令行事后补写，`_mark_preset`），之后的命令不用再写 `--preset`；编辑器出的图没有这一项。
-- **费用**：`estimate.py` 提交前按配置单价估算（出图取模型组里最贵的，文字和看图调用按固定 token 数），超过 `--max-cost` 抛 `BudgetExceeded`（退出码 9）。它会跳过修图/补质检时「质检结果」不向上游要的那条线。实际花费是事后从账本按这次的 tag（`run/`、`fix/`、`regen/`、`qc/` 加 8 位随机）汇总的，所以要求 ComfyUI 和命令行用同一个 `data_dir`。
+- **费用**：`estimate.py` 提交前按配置单价估算（出图取模型组里最贵的，文字和看图调用按固定 token 数），超过 `--max-cost` 抛 `BudgetExceeded`（退出码 9）。它会跳过修图/补质检时「质检结果」不向上游要的那条线。实际花费是事后从账本按这次的 tag（`run/`、`fix/`、`regen/`、`qc/` 加 8 位随机）汇总的，所以要求 ComfyUI 和命令行用同一个 `data_dir`。估算和实际花费都依赖配置里的 `pricing`：验收时（2026-11-27）文字和看图模型没写单价，质检、扩写都记成 0，报出来的只有出图的钱。
+- **验收记录**（2026-11-27，《三国守御录》`tower.json` + `archer_lv1`）：run → fix → regen → qc → final 全部跑通，`.json` 字段和编辑器出的一致（只多 `preset`），游戏原型读到了定稿图，共约 0.15 美元。第一次失败是因为重启后的 ComfyUI 没继承终端的代理，云端连接超时；终端里 `ga config check` 是通的，不能用它判断 ComfyUI 那边的网络。
 - 定稿是纯本机操作（`assets.finalize`）：和编辑器的「保存为定稿」不同，目标已存在时默认拒绝，`--force` 时先把旧定稿挪到 `_final_backup/<名字>_<时间>.png`。`copy_with_record` 和「保存资产」节点共用。
 
 退出码：
