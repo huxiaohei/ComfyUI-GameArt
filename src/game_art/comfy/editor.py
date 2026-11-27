@@ -142,3 +142,107 @@ def to_editor_graph(wf: dict[str, Any], object_info: dict[str, Any], name: str) 
         "last_node_id": len(nodes), "last_link_id": len(links),
         "nodes": nodes, "links": links, "groups": [], "config": {}, "extra": {}, "version": 0.4,
     }
+
+
+# ---------------------------------------------------------------- 编辑器格式 → API 格式
+CONTROL_VALUES = {"fixed", "increment", "decrement", "randomize"}
+FRONTEND_ONLY = {"Note", "MarkdownNote"}  # 只在编辑器里显示的说明框，不参与运行
+REROUTE = "Reroute"
+MODE_MUTED, MODE_BYPASS = 2, 4
+
+
+def is_editor_graph(data: Any) -> bool:
+    return isinstance(data, dict) and "nodes" in data and "links" in data
+
+
+def _widget_values(node: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    """把节点的 widgets_values（按控件顺序排的一串值）对回输入名。顺序规则和 to_editor_graph 写出时一致：
+    种子类整数后面多一个"运行后怎么变"的值，带上传按钮的控件后面多一个"image"。"""
+    raw = node.get("widgets_values")
+    if isinstance(raw, dict):
+        return dict(raw)
+    values = list(raw or [])
+    out: dict[str, Any] = {}
+    i = 0
+    for key, typ, opts in _input_specs(info):
+        if not _is_widget(typ, opts):
+            continue
+        if i >= len(values):
+            break
+        out[key] = values[i]
+        i += 1
+        if typ == "INT" and (key in SEED_NAMES or opts.get("control_after_generate")) \
+                and i < len(values) and values[i] in CONTROL_VALUES:
+            i += 1
+        if opts.get("image_upload") and i < len(values) and values[i] == "image":
+            i += 1
+    return out
+
+
+def from_editor_graph(graph: dict[str, Any], object_info: dict[str, Any]) -> dict[str, Any]:
+    """编辑器里保存的工作流（图格式）→ ga run 用的 API 格式，结果和在编辑器里点运行时发给后台的一致。
+
+    节点 id 优先用 properties.ga_id（由 to_editor_graph 写入的可读名，如 expand、gen），没有时用编号。
+    说明框会被去掉、转接点（Reroute）会被连通；静音的节点去掉，连到它的输入一并去掉；
+    旁路（bypass）的节点不支持，遇到会报错。
+    """
+    if not is_editor_graph(graph):
+        raise InputError("workflow_invalid", "这不是编辑器格式的工作流（缺少 nodes / links）")
+    if graph.get("definitions", {}).get("subgraphs"):
+        raise InputError("workflow_invalid", "工作流里有子图，命令行暂不支持；请在编辑器里把子图展开后再保存")
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    links = {link[0]: link for link in graph["links"] if link}
+    names: dict[int, str] = {}
+    for nid, n in nodes.items():
+        name = str((n.get("properties") or {}).get("ga_id") or nid)
+        if name in names.values():
+            name = str(nid)
+        names[nid] = name
+
+    def source(link_id: int) -> tuple[int, int] | None:
+        """顺着转接点往上找到真正的来源（节点编号, 输出序号）；来源被静音时返回 None。"""
+        seen: set[int] = set()
+        while True:
+            link = links.get(link_id)
+            if link is None:
+                return None
+            src, slot = link[1], link[2]
+            node = nodes.get(src)
+            if node is None or node.get("mode") == MODE_MUTED:
+                return None
+            if node["type"] != REROUTE:
+                return src, slot
+            if src in seen:
+                raise InputError("workflow_invalid", "工作流里的转接点连成了环")
+            seen.add(src)
+            ins = node.get("inputs") or []
+            if not ins or ins[0].get("link") is None:
+                return None
+            link_id = ins[0]["link"]
+
+    wf: dict[str, Any] = {}
+    for nid, node in nodes.items():
+        typ = node["type"]
+        if typ in FRONTEND_ONLY or typ == REROUTE or node.get("mode") == MODE_MUTED:
+            continue
+        title = str(node.get("title") or typ)
+        if node.get("mode") == MODE_BYPASS:
+            raise InputError("workflow_invalid", f"节点「{title}」被设成了旁路（bypass），命令行不支持；"
+                                                 "请在编辑器里取消旁路或删掉它后再保存")
+        info = object_info.get(typ)
+        if info is None:
+            raise InputError("unknown_node_class",
+                             f"ComfyUI 不认识节点「{title}」（{typ}）。请先运行 ga comfy install 并重启 ComfyUI。",
+                             {"classes": [typ]})
+        inputs = _widget_values(node, info)
+        for slot in node.get("inputs") or []:
+            if slot.get("link") is None:
+                continue
+            src = source(slot["link"])
+            if src is None:
+                inputs.pop(slot["name"], None)
+            else:
+                inputs[slot["name"]] = [names[src[0]], src[1]]
+        title = title.removesuffix(f" · {names[nid]}")
+        wf[names[nid]] = {"class_type": typ, "inputs": inputs, "_meta": {"title": title}}
+    return wf

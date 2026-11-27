@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from game_art.comfy.editor import to_editor_graph
+from game_art.comfy.editor import from_editor_graph, to_editor_graph
 from game_art.errors import InputError
 
 INFO: dict[str, Any] = {
@@ -107,3 +107,44 @@ def test_errors() -> None:
         to_editor_graph({"a": {"class_type": "Text", "inputs": {"text": ["b", 0]}},
                          "b": {"class_type": "Text", "inputs": {"text": ["a", 0]}}}, INFO, "x")
     assert "环" in c.value.message
+
+
+# ---------------------------------------------------------------- 编辑器格式 → API 格式
+def test_from_editor_graph_round_trip() -> None:
+    """导出成编辑器格式再转回来，和原来一样（没写的可选控件补上默认值，和编辑器点运行时发出去的一致）。"""
+    back = from_editor_graph(to_editor_graph(WF, INFO, "demo"), INFO)
+    assert list(back) == ["ref", "txt", "gen"]
+    assert back["ref"] == {"class_type": "Load", "inputs": {"image": "b.png"}, "_meta": {"title": "参考图"}}
+    assert back["txt"]["inputs"] == {"text": "@repo/x"} and back["txt"]["_meta"]["title"] == "Text"
+    assert back["gen"]["inputs"] == {"prompt": ["txt", 0], "n": 2, "seed": 7, "images": ["ref", 0],
+                                     "mask": ["ref", 1], "tag": "t"}
+
+
+def test_from_editor_graph_edited_values_and_helpers() -> None:
+    g = to_editor_graph(WF, INFO, "demo")
+    _node(g, "gen")["widgets_values"] = ["", 3, 9, "randomize", "我的标签"]  # 在编辑器里改过的值
+    # 一个说明框、一个转接点（txt → 转接点 → gen.prompt）、一个被静音的节点连到 gen.mask
+    g["nodes"] += [
+        {"id": 10, "type": "Note", "mode": 0, "inputs": [], "widgets_values": ["备注"]},
+        {"id": 11, "type": "Reroute", "mode": 0, "inputs": [{"name": "", "type": "*", "link": 90}]},
+        {"id": 12, "type": "Load", "mode": 2, "inputs": [], "widgets_values": ["a.png", "image"],
+         "properties": {"ga_id": "muted"}},
+    ]
+    prompt = next(i for i in _node(g, "gen")["inputs"] if i["name"] == "prompt")
+    mask = next(i for i in _node(g, "gen")["inputs"] if i["name"] == "mask")
+    g["links"] += [[90, 2, 0, 11, 0, "STRING"], [91, 11, 0, 3, 0, "STRING"], [92, 12, 1, 3, 5, "MASK"]]
+    prompt["link"], mask["link"] = 91, 92
+    back = from_editor_graph(g, INFO)
+    assert set(back) == {"ref", "txt", "gen"}
+    assert back["gen"]["inputs"] == {"prompt": ["txt", 0], "n": 3, "seed": 9, "images": ["ref", 0], "tag": "我的标签"}
+
+
+def test_from_editor_graph_errors() -> None:
+    g = to_editor_graph(WF, INFO, "demo")
+    with pytest.raises(InputError, match="不认识节点"):
+        from_editor_graph(g, {k: v for k, v in INFO.items() if k != "Gen"})
+    _node(g, "gen")["mode"] = 4
+    with pytest.raises(InputError, match="旁路"):
+        from_editor_graph(g, INFO)
+    with pytest.raises(InputError, match="不是编辑器格式"):
+        from_editor_graph(WF, INFO)
