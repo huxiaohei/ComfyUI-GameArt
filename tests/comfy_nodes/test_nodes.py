@@ -481,6 +481,32 @@ def test_qc_review_fix_edits_stored_image(monkeypatch: pytest.MonkeyPatch, temp_
         nodes.GAQCReview().run(fix=fix, edit_model="gpt-image-2")
 
 
+def test_qc_review_fix_and_qc_saved_asset(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path,
+                                          tmp_path: pathlib.Path) -> None:
+    """命令行（ga fix / ga qc）传的是已保存候选图的完整路径：从那里取图和记录，新图的记录里写明修自哪一张、哪几条。"""
+    png = tmp_path / "imgs" / "archer_lv1_00001.png"
+    png.parent.mkdir()
+    Image.new("RGBA", (8, 8), (200, 100, 50, 255)).save(png)
+    png.with_suffix(".json").write_text(json.dumps({"brief": "箭楼", "tag": "old", "item": "archer_lv1",
+                                                    "qc": {"score": 6, "issues": ["旗子偏橙"]}}), encoding="utf-8")
+    r = SeqRouter('{"prompt":"旗子改成草黄。"}', '{"score":8,"issues":[]}')
+    monkeypatch.setattr(common, "get_router", lambda: r)
+    fix = json.dumps({"file": str(png), "notes": ["旗子偏橙"], "issues": [2]})
+    out = nodes.GAQCReview().run(fix=fix, tag="fix/1")
+    meta = out["result"][2]
+    assert meta["fix"]["from"] == "archer_lv1_00001.png" and meta["fix"]["issues"] == [2]
+    assert meta["item"] == "archer_lv1" and meta["qc"][0]["score"] == 8 and all(c[3] == "fix/1" for c in r.calls)
+    # 只质检：结果在 ui 里，不往下游送
+    r.texts, r.calls = ['{"score":7,"issues":[{"text":"线稍粗","level":"suggest"}]}'], []
+    out = nodes.GAQCReview().run(fix=json.dumps({"file": str(png), "qc": True}))
+    assert out["ui"]["ga_qc"][0]["mode"] == "qc" and out["ui"]["ga_qc"][0]["results"][0]["score"] == 7
+    assert "箭楼" in r.calls[0][2][0].text
+    with pytest.raises(RuntimeError, match=r"旁边的 \.json"):
+        nodes.GAQCReview().run(fix=json.dumps({"file": str(tmp_path / "nope.png"), "qc": True}))
+    with pytest.raises(RuntimeError, match="整数列表"):
+        nodes.GAQCReview().run(fix=json.dumps({"file": str(png), "notes": ["x"], "issues": ["2"]}))
+
+
 def test_qc_review_fix_retries_without_fidelity(monkeypatch: pytest.MonkeyPatch, temp_dir: pathlib.Path) -> None:
     """模型不认保真度参数时，去掉它再试一次，并在记录里注明；别的错误照常报出来。"""
     class Picky(SeqRouter):

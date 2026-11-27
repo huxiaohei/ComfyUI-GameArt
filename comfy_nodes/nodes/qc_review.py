@@ -84,10 +84,22 @@ def _store(pils: list[Image.Image], meta: dict[str, Any]) -> list[dict[str, Any]
     return out
 
 
+def _saved_asset(name: str) -> Path | None:
+    """命令行（ga fix / ga qc）传来的是一张已保存资产的完整路径：必须是 .png，旁边有同名 .json 记录。
+    不是完整路径时返回 None（编辑器传的是临时目录里的名字）。"""
+    p = Path(name)
+    if not p.is_absolute():
+        return None
+    if p.suffix.lower() != ".png" or not p.is_file() or not p.with_suffix(".json").is_file():
+        raise InputError("fix_base_missing", f"找不到这张图或它旁边的 .json 记录：{p}")
+    return p
+
+
 def _load_stored(name: str) -> tuple[Image.Image, dict[str, Any]]:
-    if not _STORE_NAME.fullmatch(name):
+    saved = _saved_asset(name)
+    if saved is None and not _STORE_NAME.fullmatch(name):
         raise InputError("bad_fix", f"要修改的图片名字不对：{name!r}")
-    file = _store_dir() / name
+    file = saved or _store_dir() / name
     try:
         with Image.open(file) as im:
             base = im.convert("RGBA")
@@ -100,28 +112,34 @@ def _load_stored(name: str) -> tuple[Image.Image, dict[str, Any]]:
 
 
 class FixJob(NamedTuple):
-    file: str  # 要处理的那张图在临时目录里的名字
+    file: str  # 要处理的那张图：临时目录里的名字，或命令行给的已保存资产的完整路径
     notes: list[str]  # 修改意见
     only_qc: bool  # 只补一次质检
     resize: bool = False  # 只在本机调整主体大小
+    issues: tuple[int, ...] = ()  # 命令行 ga fix 选的是原图质检结果里的第几条问题，只用来记进记录
 
 
 def parse_fix(fix: str) -> FixJob | None:
     """fix 是页面脚本写进来的 JSON，空 = 正常运行。三种写法：
     {"file": 要修的那张图, "notes": [修改意见]} = 在这张图上修改；
     {"file": 那张图, "qc": true} = 只给这张图补一次质检（平时关着自动质检时用）；
-    {"file": 那张图, "resize": true} = 在本机把这张图的主体缩放到目标占比，不调模型。"""
+    {"file": 那张图, "resize": true} = 在本机把这张图的主体缩放到目标占比，不调模型。
+    file 可以是临时目录里的名字（编辑器），也可以是已保存资产的完整路径（命令行）；
+    命令行修图时还会带 "issues"：选的是原图质检结果里的第几条，记进新图的记录。"""
     if not (fix or "").strip():
         return None
     try:
         obj = json.loads(fix)
         file, only_qc, resize = obj["file"], obj.get("qc") is True, obj.get("resize") is True
         notes = obj.get("notes", []) if only_qc or resize else obj["notes"]
+        issues = obj.get("issues", [])
         if not isinstance(file, str) or not isinstance(notes, list) or not all(isinstance(n, str) for n in notes):
             raise ValueError("字段类型不对")
+        if not isinstance(issues, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in issues):
+            raise ValueError("issues 应该是整数列表")
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise InputError("bad_fix", f"fix 的内容不对（它由节点上的按钮自动填写，平时应该留空）：{e}") from e
-    return FixJob(file, [n.strip() for n in notes if n.strip()], only_qc, resize)
+    return FixJob(file, [n.strip() for n in notes if n.strip()], only_qc, resize, tuple(issues))
 
 
 def _blocked() -> Any:
@@ -333,6 +351,10 @@ class GAQCReview:
                                   negative=plan.negative, size=size, tag=tag, refs=len(req.refs))
             # 这张图是在上一版的基础上按这些意见修改出来的；style_refs = 附带了几张画风对照图
             out_meta["fix"] = {"notes": notes, "style_refs": len(anchors), **req.params}
+            if _saved_asset(fixed_from) is not None:  # 命令行修的是一张已保存的候选：记下是哪一张、选了哪几条问题
+                out_meta["fix"]["from"] = Path(fixed_from).name
+                if job.issues:
+                    out_meta["fix"]["issues"] = list(job.issues)
             if fidelity_dropped:
                 out_meta["fix"]["input_fidelity"] = "模型不支持，已去掉"
             used_model = f"{target.provider}:{target.model}"
